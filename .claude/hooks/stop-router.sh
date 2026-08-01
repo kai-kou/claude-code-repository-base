@@ -26,6 +26,15 @@ run_hook() {
   local script="$1"
   local err exit_code
 
+  # ファイル不在は正常スキップ（クラッシュ扱いにしない）。
+  # 公開物では著者専用フック（例: stop-publish-check.sh）が DENYLIST で除外されるため、
+  # 下流の配布先ではファイルが存在しない状態が正規の構成になる。
+  # 個別の呼び出し箇所に条件を書くと将来別のフックが外れたときに同じ事故が再発するため、
+  # run_hook 側で一律吸収する（存在するのに失敗した場合は従来どおりクラッシュ扱い）。
+  if [ ! -f "$HOOK_DIR/$script" ]; then
+    return 0
+  fi
+
   # stderr をキャプチャしつつ exit code を取得（set -e 未使用のため $? は確実にサブスクリプトの終了コード）
   err=$(printf '%s\n' "$INPUT" | "$HOOK_DIR/$script" 2>&1 >/dev/null)
   exit_code=$?
@@ -63,6 +72,9 @@ run_hook "stop-slack-notify.sh"
 
 # 4. 完了報告フォーマットチェック（ご依頼再掲→アウトカム中心・completion-report-rules.md）
 run_hook "stop-completion-report-check.sh"
+
+# 5. 公開リポジトリ（kai-kou/claude-code-repository-base）のドリフト検知（Issue #381）
+run_hook "stop-publish-check.sh"
 
 # 収集したメッセージを単一の stderr 出力として出す（L-050: 複数メッセージ問題を修正）。
 # 公式仕様: exit 2 時は stdout の JSON が無視されるため stderr に統一する（Issue #142）。

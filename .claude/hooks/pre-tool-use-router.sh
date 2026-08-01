@@ -30,7 +30,11 @@ fi
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
 # git push チェック（main/master 直接 push のブロック）
-if echo "$COMMAND" | grep -qE 'git\s+push'; then
+# 【注意】"git" と "push" が隣接する 'git\s+push' だけだと `git -C <path> push ...` を
+# 取りこぼす（critical 1 の再発防止・pre-git-push-check.sh 側の再設計と対）。
+# "git" と "push" が単語としてどちらもコマンド中に現れれば委譲し、精密な判定は
+# pre-git-push-check.sh 側のセグメント解析に任せる（push でないなら向こうが allow で返す）。
+if echo "$COMMAND" | grep -qE '\bgit\b' && echo "$COMMAND" | grep -qE '\bpush\b'; then
   echo "$INPUT" | "$HOOK_DIR/pre-git-push-check.sh"
   exit $?
 fi
