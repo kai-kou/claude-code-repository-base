@@ -1,0 +1,133 @@
+# Warm 層 教訓 — PR レビュー・自動マージ
+
+PR 作成・AI レビュー監視・自動マージに関するカテゴリ別教訓（タスク依存で Read）。
+
+---
+
+## L-050: PR 作成直後に存在確認しないとサイレントスキップを見逃す（2026-06-13）
+
+**パターン**: `gh pr create` がプロキシ環境やエラーで失敗しても、戻り値を確認せず
+「PR 作成済み」と思い込んで次の処理（レビュー依頼・マージ）に進む。実際には PR が無く、
+作業がサイレントに失われる。
+
+**根本原因**: PR 作成コマンドの成否を検証していない（Time-of-Check の欠落）。
+
+**対策**: PR 作成の **直後に必ず存在確認** する。`pr-review-flow-summary.md` の必須フォーム。
+
+クラウド（一次経路・L-114）:
+```
+mcp__github__list_pull_requests(owner="__OWNER__", repo="__REPO__",
+                                head="__OWNER__:{branch}", state="all")
+```
+
+ローカル実行用:
+```bash
+gh pr list --head {branch} -R __OWNER__/__REPO__ --limit 1 --json number,url,state \
+  --jq '.[0] | select(.url != null) | "PR #\(.number) \(.state): \(.url)"'
+```
+
+存在確認が取れない場合は PR 作成を再試行する（マージへ進まない）。
+
+---
+
+## L-102: AI レビュー指摘対応はユーザーに報告しない（サイレント原則）（2026-06-13）
+
+**パターン**: AI レビュー（Gemini / Copilot 等）の指摘対応をチャットや Slack `@mention` で
+逐次ユーザーに報告し、ユーザーをレビューの門番にしてしまう（Human-in-the-loop アンチパターン）。
+
+**根本原因**: 指摘対応は境界内（自律実行）の作業なのに、進捗を逐次共有すべきと誤解している。
+
+**対策**: 指摘対応の記録は **PR スレッド返信・Resolve・Issue コメントのみ**。チャット逐次報告・
+Slack `@mention`・完了報告アウトカムへのレビュー対応混入は禁止。例外は A-1〜A-6
+（サーキットブレーカー発動・ファクト致命的 NG 等）のみ。完了報告の `--outcome` は
+「初回指示で何ができるようになったか」だけを書き、指摘件数・修正サイクルは書かない。
+
+---
+
+## L-109: 他セッションが対応中の PR に介入しない（アクティビティロック）（2026-06-13）
+
+**パターン**: 共通プリフライト（`check_pending_pr_reviews.py`）で全オープン PR を見るため、
+別セッションが作成・対応中の PR に催促・指摘対応・問題なし判定・マージ・subscribe で
+重複参入してしまう（レンダリング等の二重実行事故）。
+
+**根本原因**: `status:in-progress` の論理ロック（CP-4 レイヤー 2）は PR レビューフェーズには効かない。
+
+**対策**: `check_pending_pr_reviews.py` が各 PR の人間側最終アクティビティを `last_activity_min`
+として算出し、**直近 10 分以内に活動がある PR を `active_session: true` として
+`--actionable-only` から除外** する。出力に現れない PR は別セッションが現役対応中
+（`--include-active` での強制取得も禁止）。自分が作成した PR の監視は `--json` + PR 番号
+フィルタで従来どおり行う。詳細は `session-concurrency-rules.md` レイヤー 5。
+
+---
+
+## L-120: 高頻度で自動更新される git 追跡テレメトリを feature の WIP 自動コミットに相乗りさせない（2026-06-27）
+
+**パターン**: 月次コスト集計（`content/analytics/cost_monthly/`）を Stop hook の `--flush` が
+毎セッション書き換え、直後の WIP 自動コミット `git add -A` がそれを作業中の feature ブランチへ
+無差別にステージ。結果、全 feature PR に無関係な cost churn が混入し、レビューセッションが
+正しく「無関係 churn」と判定して破棄しようとする不健全なループに陥った（実例: PR #101 が
+本来 3 ファイルなのに cost_monthly 25 行が混入）。
+
+**根本原因**: 「高頻度で自動更新される git 追跡ファイル（テレメトリ）」と「feature ブランチ上の
+無差別 `git add -A` 自動コミット」が構造的に両立しない。永続化（追跡）と churn 隔離（feature
+差分を汚さない）を分離する仕組みが無かった。
+
+**対策**（#106 で実装 → #242 で永続化レーンを刷新）:
+- Stop hook の WIP `git add -A` から `content/analytics/cost_monthly/` を **pathspec 除外**
+  （`git add -A -- . ':(exclude)content/analytics/cost_monthly/'`）。
+- **#242 以降**: cost_monthly は gitignore 対象（main では追跡しない）。永続化は
+  `tools/commit_cost_telemetry.py` が **テレメトリ専用データブランチ `telemetry/cost-data` へ
+  1 日 1 回 plain git push** で行う（gh 非依存・PR レーンは廃止。旧「1 日 1 回の専用 PR」は
+  クラウドの gh 403 で機能しなかった）。`chore/cost-telemetry-*` PR はもう作られない。
+- `tools/self_review_check.py` が「feature 差分に cost_monthly が追加/変更として現れたら
+  回帰」と Warning する。
+
+**判定基準**: hook やスケジュールが「自動で書き換える追跡ファイル」を作るとき、その commit 経路が
+feature ブランチに乗らないか（専用ブランチ／専用 PR に隔離されているか）を必ず確認する。
+
+---
+
+## L-118: 局面限定の「マージするな」口頭指示を恒久ポリシーに昇格させてマージ前で止まる（2026-06-26）
+
+**パターン**: セッション中盤（デバッグ・調査など不安定な局面）で受けた一時的な口頭指示
+「ストップしたら自動マージしないで」「いったん止めて」を、**その局面が終わった後の通常の PR フローにまで持ち越し**、
+Layer 0 + Layer 1 を通過してマージ可能になった PR を「マージ判断待ち」で止めてしまう。
+これは L-103（PR を出さず止まる）の姉妹形態で、**PR は出してレビューも済んだのにマージ前で止まる** CP-6 中核違反。
+
+**根本原因**: 一時的・局面限定の口頭指示（session-scoped）と、恒久ポリシー（`CLAUDE.md`「PR 作成の完全自律化」・
+auto-merge 既定）の **相互作用ルールが無く**、曖昧なまま最も保守的な「止まり続ける」に倒した。
+チャット履歴は圧縮で揮発するが恒久ルール（CLAUDE.md・`.claude/rules/`）はディスクから再読込されるため、
+CLAUDE.md/ルールに書かれていない口頭指示は **その局面が終われば失効** するのが正しい解釈。
+
+**対策（判定基準）**:
+- 「マージするな」「止めて」等の口頭指示は **発話された局面（デバッグ・中途状態・特定 PR の保留）に限定** して解釈する。恒久ポリシーの上書きとは見なさない。
+- ユーザーがその後「進めて」「完遂して」等で **フロー継続を再承認** したら、auto-merge を含む完全自律フローを最後まで走らせる（マージ前で再び止まらない）。
+- PR のマージ保留を恒久化したいなら、ユーザーが **現在の・明示の** 保留指示を出しているか、PR に保留ラベルがある場合のみ。それ以外は **Layer 0 + Layer 1 通過 = 自律マージが既定の終端状態**。
+- 迷ったら「マージ判断待ち」で止めるのではなく、`pr-review-flow-summary.md` の自律マージへ進む（PR 作成・マージは A-1〜A-6 の既約境界外に **含まれない**＝確認不要）。
+
+---
+
+## L-119: 組み込み `code-review` スキルは `disable-model-invocation` により Claude の自律起動不可（2026-07-21）
+
+**パターン**: 自律セッションで Layer 1 セルフレビューを実行しようと `Skill(code-review)` を呼ぶと
+`Skill code-review cannot be used with Skill tool due to disable-model-invocation` で失敗する（v2.1.216 実機確認）。
+同じ検証で `Skill(security-review)` は問題なく起動できたため、`code-review` **個別** にモデル自律起動が
+禁止されていると判明（一時的な不具合ではなく Anthropic 側の意図的な仕様変更）。
+
+**根本原因**: `disable-model-invocation` は Claude Code 公式の skill frontmatter フィールドで、
+`true` にすると Claude（Skill ツール経由の自律起動）を禁止し、**ユーザーが対話セッションで
+スラッシュコマンドを手打ちしたときだけ** 起動できる（deploy・publish 等の副作用/不可逆操作を
+「テストが通ったから Claude が勝手に決める」のを防ぐ設計）。Anthropic が組み込み `code-review` に
+このフィールドを付与したため、Layer 1「Claude 自身が `/code-review` を必ず実行する」前提が崩れた。
+
+**対策（恒久・#280）**: **同名 project スキルで bundled をオーバーライドする**。公式仕様
+（skills ドキュメント「A skill at any of these levels also overrides a bundled skill with the same name.
+For example, a `code-review` skill in your project's `.claude/skills/` replaces the bundled `/code-review`」）
+により、`.claude/skills/code-review/SKILL.md`（自前実装・`disable-model-invocation` なし）を置くと
+対話（`/code-review` 手打ち）・自律（`Skill(code-review)`）の両方から起動できる。Layer 1 の標準実行手段は
+この自前スキル（SSOT: `docs/rules/ai-reviewer-strategy.md`）。暫定対応期（#275）に使った
+`self-reviewer` Step 2 のサブエージェント直接レビューは、自前スキルの解決が bundled 側に倒れて
+自律起動エラーが再発した場合のフォールバックとして残す。
+`disable-model-invocation` が付与された他の組み込みスキルを自律起動しようとして同種のエラーに
+遭遇したら、まずこのフィールドの有無を疑い、恒久利用したい場合は同名 project スキルでの置換を検討する
+（対応: #275 → #280）。

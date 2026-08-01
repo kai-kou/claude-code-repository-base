@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "claude-code-base",
+  "description": "汎用 Claude Code 自律運用ベース（ルール・スキル・エージェント・フック・MCP のテンプレート）。Human-on-the-loop で実装→PR→AI レビュー→自動マージまで自律実行する土台。",
+  "version": "0.1.0",
+  "author": {
+    "name": "kai-kou",
+    "url": "https://github.com/kai-kou"
+  },
+  "homepage": "https://github.com/kai-kou/claude-code-repository-base",
+  "repository": "https://github.com/kai-kou/claude-code-repository-base",
+  "keywords": [
+    "claude-code",
+    "autonomous",
+    "harness",
+    "template",
+    "base",
+    "agent-teams"
+  ],
+  "skills": "./.claude/skills/",
+  "agents": ["./.claude/agents/owner.md"]
+}

@@ -1,0 +1,24 @@
+claude-code-base
+Copyright (c) 2026 kai-kou
+
+This product is licensed under the MIT License (see LICENSE), with the
+exception noted below.
+
+--------------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------------
+
+.claude/skills/skill-creator/
+    Derived from Anthropic's official skill-creator reference implementation.
+    Licensed under the Apache License, Version 2.0.
+    The full license text is included at .claude/skills/skill-creator/LICENSE.txt
+
+    As of 2026-07-28 this directory is vendored as-is; this project has made
+    no modifications to it. If files here are modified in the future, note the
+    change inline in the affected files (Apache-2.0 section 4(b)).
+
+--------------------------------------------------------------------------------
+
+When redistributing this repository (including via scripts/apply-to-repo.sh,
+which copies .claude/skills/ into downstream repositories), retain this NOTICE
+file and the Apache-2.0 license text that accompanies the directory above.
