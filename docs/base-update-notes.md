@@ -304,7 +304,7 @@
   （`name` / `repo` / `timezone`）の下流固有値も引き継ぐようになった（従来は `enabled:false` のみ）。
   再適用のたびに `project.name` が repo slug へ巻き戻る drift が解消される（自動同期で完結）。
   ② ベース自己参照専用の議論スペック `tools/discussion_specs/public_readiness_audit.json`
-  （`/home/user/claude-code-base` 前提で下流実行不能）を `docs/discussion_specs_base_only/` へ隔離し、
+  （ベース自身の作業ディレクトリ絶対パス前提で下流実行不能）を `docs/discussion_specs_base_only/` へ隔離し、
   `modules.yaml` の `agent-teams` モジュール `tools:` 列挙からも除外した（下流へ配布されなくなる）。
   ③ `.claude/hooks/permission-request-auto-allow.sh` が `.claude/settings.json` /
   `.claude/settings.local.json` を auto-allow の対象から除外し、通常の権限フロー（ユーザー確認）に
