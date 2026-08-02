@@ -1,6 +1,7 @@
 ---
 name: skill-audit
 description: 本リポジトリの Agent Skills（`.claude/skills/*/SKILL.md` + `.claude/commands/*.md`）を棚卸し監査する。トリガー衝突・死蔵・陳腐化（L-114 未追従含む）・肥大化・責務重複・欠落を観点別に検出し、description の発火精度を採点し、検出問題を Issue 化する。「Skill を棚卸しして」「スキル監査して」「/skill-audit」と依頼された時に使用する。個別スキルの中身の実装・修正は各スキル自身、ワークフロー健全性（PR/Issue 状態）の監査は workflow-health-check が担当するため、本スキルは Agent Skills 資産の構造監査に限定する。
+effort: medium
 ---
 
 # skill-audit — Agent Skills 棚卸し監査

@@ -14,8 +14,14 @@
 | **振り返りレーン** | `retrospective` → `retro-try-handler` | ワークフロー完了・失敗時の KPT 生成と Try 起票 → Try Issue の実装・PR 化 | 各パイプラインの最終ステップ / 日次消化スロット / 「レトロスペクティブして」 |
 | **監査・衛生レーン** | `workflow-health-check`（監査ロジック本体）→ `project-sync`（衛生実行・軽量版の呼び出し側） | PR 健全性・Issue 状態の監査、Stale / Orphan / ラベル不整合の解消 | 週次の監査スロット / 日次の衛生スロット / 「ヘルスチェックして」「project-sync して」 |
 
-`project-manager`（Issue / Milestone の個別 CRUD）・`waiting-user-handler`（`status:waiting-user` のトリアージ）は
+`project-manager`（Issue / Milestone の個別 CRUD）・`waiting-user-handler`（`status:waiting-user` のトリアージ）・
+`skill-audit`（Agent Skills 資産の構造監査）・`audit-runner`（外部監査プロトコルによるセットアップ構成監査）は
 上記 3 レーンのいずれにも属さない **単発オペレーション** で、本マップの対象外。
+
+> **監査系 3 スキルの棲み分け**（混同しやすいので明記）: 対象が **Issue / PR の状態** なら
+> `workflow-health-check`（監査・衛生レーン）、**Agent Skills 資産の構造** なら `skill-audit`、
+> **セットアップ構成を外部プロトコルで測る** なら `audit-runner`。`audit-runner` が発見した改善は
+> Issue 化して改善 Issue レーンへ受け渡す（ラベル経由・§3）。
 
 ## 2. 一意判定ルール（迷ったときはこの順で決める）
 

@@ -1,6 +1,7 @@
 ---
 name: discussion-review
 description: 議論型レビュー（敵対的相互レビュー）をネイティブ Agent Teams（name 付き Agent tool + SendMessage + 共有ホワイトボード）で実行する。「専門チームを組成して」「チームで議論して」「議論型レビューして」「/discussion-review」と依頼された時、および pr-review-watcher の Layer 2 自動起動（discussion_review_trigger.py が対象と判定した時）に使用する。claude -p サブプロセスは起動しない（失敗時のみ tools/run_discussion_review.py へフォールバック）。役割分担型 fan-out（独立評価の集計）で足りる軽微タスクには使わない。
+effort: high
 ---
 
 # discussion-review — ネイティブ議論型レビュー

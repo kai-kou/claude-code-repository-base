@@ -751,6 +751,9 @@ MCP サーバー設定に `alwaysLoad: true` を追加すると、そのサー�
 - ✅ `allowedDomains` で全接続先ドメインを明示的にホワイトリスト登録（多層防御）
 - ✅ `sandbox-rules.md` でパターン設計の意図を文書化済み
 - **設計原則**: `excludedCommands` だけに頼らず、`allowedDomains` との **両方** で確実にカバーする
+- ⚠️ **前提条件（#383）**: 上記はいずれも `sandbox.enabled: true`（2026-08-02 追加）かつ `bwrap` /
+  Seatbelt が使えるローカル環境でのみ効く。クラウド実行環境ではサンドボックス自体が動作しないため、
+  本項の「防御策あり」をクラウドのリスク評価に数えない（SSOT: `sandbox-rules.md`）
 
 #### CC-BUG-13: サンドボックスの書き込み/読み込み非対称性
 

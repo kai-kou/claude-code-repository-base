@@ -31,6 +31,58 @@
 
 ---
 
+## 2026-08-02（Issue #389）`audit-runner` スキルを追加（定期実行するかどうかを選んでください）
+
+**変更内容**:
+
+- 外部の監査プロトコル（既定は [claude-code-ultimate-guide の audit-prompt.md](https://github.com/FlorianBruniaux/claude-code-ultimate-guide/blob/main/tools/audit-prompt.md)）を
+  **実行のたびに取得** して忠実に実行し、指摘を **議論型レビューで精査** → 採用分のみ Issue 化 → 実装 →
+  PR → マージ → **同一版で再監査して before/after を対比** するスキル `audit-runner` を追加した。
+- 監査スコアを鵜呑みにせず、指摘ごとに「真の欠陥 / 意図的な設計選択 / 著者の独自慣習の押し付け」を
+  判定するのが中核。点数だけが上がる変更は採用しない設計。
+- 成果物は `content/audits/<YYYY-MM-DD>/`（`protocol.md` / `before.md` / `after.md` / `diff.md`）に残る。
+
+**下流で必要な手動手順**:
+
+1. **手動実行のみで運用するなら、何もしなくてよい**（自然文「セットアップを監査して」または
+   `/audit-runner` で起動する）。同期しただけで使える。
+2. **定期実行したい場合のみ**、次のいずれかを登録する（SKILL.md「定期実行の登録」節に手順あり）:
+   - Routine（クラウド）: `create_trigger` で `create_new_session_on_fire=true` の Routine を作り、
+     プロンプトに「`audit-runner` スキルで監査プロトコルを実行し、議論 → 対応 → 再監査まで完遂する」と書く。
+     cron は UTC 指定（JST から 9 時間引く）。**推奨頻度は月次**（1 サイクルでサブエージェント 4〜6 体分を消費する）
+   - 既存ルーティンのスロットに 1 行追加して本スキルを起動する
+3. 別の監査プロトコルを使いたい場合は、環境変数 `AUDIT_PROTOCOL_URL` で上書きする（1 実行 = 1 プロトコル）。
+4. `content/audits/` を追跡したくないリポジトリは `.gitignore` に追加する（既定では追跡される）。
+
+---
+
+## 2026-08-02（Issue #383）`sandbox.enabled: true` を追加（ローカル環境でネットワーク許可リストが実際に効き始めます）
+
+**変更内容**:
+
+- `.claude/settings.json` の `sandbox` に **`enabled: true` を追加** した。従来は `allowedDomains` /
+  `excludedCommands` を書いていたが `enabled` が無いためサンドボックス自体が起動しておらず、
+  許可リストは **一切機能していなかった**（許可リスト外ドメインへ Bash から到達できることを実機確認）。
+- あわせて `.git-credentials` / `.netrc` を `permissions.deny` と `pre-tool-use-router.sh` の
+  両層でブロックするようにした（Issue #384）。
+- `failIfUnavailable` は **意図的に追加していない**（サンドボックス不可の環境でセッション起動自体が
+  失敗し、無人セッションが沈黙するため）。
+
+**下流で必要な手動手順**:
+
+1. `apply-to-repo.sh` の同期後、**自リポジトリの `.claude/settings.json` の `sandbox.network.allowedDomains`
+   を見直す**。これまで許可リストは無効だったため、有効化によって **今まで通っていた外部通信が
+   遮断される可能性がある**（ローカル実行時。`bwrap` / Seatbelt が使える環境）。
+   自プロジェクトが実際に接続するドメイン（独自 API・パッケージレジストリ等）を洗い出して追加する。
+2. 検証方法: ローカルで Claude Code を再起動し、Bash から許可リスト外のドメインへ
+   `curl -s -o /dev/null -w "%{http_code}" https://example.com/` を実行してブロックされることを確認する。
+   通ってしまう場合は `enabled` が反映されていないか、環境に `bwrap` が無い。
+3. **クラウド実行環境（Claude Code on the web）では `bwrap` が存在せずサンドボックスは動作しない**
+   （実機確認済み）。クラウドのみで運用しているなら手順 1・2 は不要だが、ローカル実行や下流配布を
+   行うなら実施すること。詳細は `docs/rules/sandbox-rules.md`。
+
+---
+
 ## 2026-08-01（Issue #379）ベースの配布元を公開リポジトリへ分離（apply-base の取得元が変わります）
 
 **変更内容**:

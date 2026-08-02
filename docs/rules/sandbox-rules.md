@@ -8,8 +8,43 @@ Claude Code が Bash ツールでコマンドを実行する際、サンドボ�
 
 | 設定 | 効果 |
 |------|------|
+| `sandbox.enabled` | **サンドボックス機能全体の起動スイッチ。これが `true` でない限り、以下のサブ設定はすべて適用されない**（#383） |
 | `sandbox.network.allowedDomains` | サンドボックス内プロセスがアクセスできるドメインを制限 |
 | `sandbox.excludedCommands` | このパターンにマッチするコマンドはサンドボックスのネットワーク制限を **完全バイパス** して実行される |
+
+### 🔴 `enabled` は前提条件（省略すると全設定が無効になる・#383）
+
+`allowedDomains` や `excludedCommands` を書いただけではサンドボックスは有効にならない。公式は
+「To enable the sandbox across all of your projects, set `sandbox.enabled` to `true`」と明記しており
+（[公式](https://code.claude.com/docs/en/sandboxing)）、公式サンプル `examples/settings/settings-bash-sandbox.json`
+も例外なく `enabled: true` を先頭に置いている。
+
+本リポジトリは 2026-08-02 まで `enabled` を欠いており、許可リスト外ドメイン（`example.com`）へ
+Bash から HTTP 200 で到達できる状態だった（実機検証で確認）。つまり #379 のネットワーク許可リスト厳格化は
+**制限が効いている前提で行われたが、その前提自体が成立していなかった**。設定を追加・変更したら、
+必ず許可リスト外ドメインへの到達可否を実機で確認する（設定ファイルの記述だけを根拠にしない）。
+
+### 🔴 クラウド実行環境ではサンドボックスは動作しない（実機確認・#383）
+
+Claude Code on the web のコンテナ（`CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`）には
+Linux 側のサンドボックス実装である **`bwrap`（bubblewrap）が存在しない**（`command -v bwrap` で確認済み）。
+そのため `enabled: true` を設定してもクラウドでは許可リストは適用されず、`example.com` への到達は
+引き続き成功する（実機確認済み）。
+
+- **クラウドでの実効的な防御は 3 層**: ① セッションコンテナ自体の隔離（`IS_SANDBOX=yes`・破棄前提の
+  ephemeral コンテナ）② `permissions.allow/deny` のツール単位 ACL ③ `pre-tool-use-router.sh` 等の
+  PreToolUse フック。`allowedDomains` / `excludedCommands` はここに含まれない。
+- **`enabled: true` を設定する意義はローカル実行と配布先にある**。本リポジトリは `apply-base` で下流へ
+  配布されるベースであり、`bwrap` / Seatbelt が使えるローカル環境では設定が実際に効く。
+  #379 が問題視した「ブロード exclusion の危険な既定値」も、その効き先はローカル・下流環境である。
+- **したがって「クラウドで到達できた」ことを根拠に許可リストを緩めない**。検証はローカル環境で行う。
+
+### `failIfUnavailable` は意図的に採用しない
+
+`sandbox.failIfUnavailable: true` はサンドボックスが利用不可な環境でセッションを **起動失敗させる** 設定。
+本リポジトリは R-1 ルーティン等のクラウド無人セッションで稼働するため、実行環境側のサンドボックス依存が
+欠けた瞬間に全セッションが沈黙し、誰も気づけないまま停止する。CP-6（持続可能な自律運用）と衝突するため
+**採用しない**（議論型レビュー `content/discussions/audit-prompt-findings-2026-08-02/` で 4 名合意・#383）。
 
 ### フックスクリプトはサンドボックス外
 
@@ -67,9 +102,13 @@ Claude Code のサンドボックスとは独立したプロセスで実行さ�
 ### 変更後に何が変わるか
 
 - `tools/` 配下の Python スクリプトは、**`verify_broker_migration.py` / `finalize_broker_migration.py`
-  以外すべて** `allowedDomains` の制限を受けるようになった（従来は無条件バイパス）。
+  以外すべて** `allowedDomains` の制限を受ける設計になった（従来は無条件バイパス）。
   上記調査の結果、実際に必要なドメインは全て `allowedDomains` でカバーされているため、
   通常運用への影響はない（`raw.githubusercontent.com` 追加のみが実質的な差分）。
+  > ⚠️ **ただしこの設計は 2026-08-02 まで発効していなかった**: `sandbox.enabled` が無いため
+  > サンドボックス自体が起動しておらず、制限は一切かかっていなかった（上記「`enabled` は前提条件」参照・#383）。
+  > 実際に制限がかかり始めるのは #383 で `enabled: true` を入れた後、かつ `bwrap` / Seatbelt が
+  > 使えるローカル環境に限られる。
 - 新しい `tools/*.py` を追加する場合、**既定では exclusion にヒットしない**。接続先ドメインを
   `allowedDomains` に追加すること（次節「新しい tools スクリプトを追加するとき」参照）。
 - 接続先が実行時まで決まらない（環境変数・ユーザー設定依存の）ツールを新規追加する場合のみ、
@@ -190,7 +229,12 @@ bash / sh ラッパースクリプト経由でしか呼べない場合は、ラ�
 
 ## トラブルシューティング
 
-### `tools/*.py` スクリプトの通信が失敗する（2026-08-01 見直し後・#379）
+### `tools/*.py` スクリプトの通信が失敗する（2026-08-02 の `enabled: true` 適用後・#379 / #383）
+
+> この症状が起こりうるのは **`enabled: true` が入った 2026-08-02 以降** かつ **`bwrap` / Seatbelt が
+> 使えるローカル環境** に限られる。2026-08-01 の #379 時点では `enabled` が無く制限は発効していなかった。
+> クラウド実行環境では現在も発生しない（サンドボックス自体が動作しないため）。
+
 
 1. 接続先ドメインが `settings.json` の `allowedDomains` に登録されているか確認（**既定の到達経路**）
 2. 未登録なら `allowedDomains` に追加する（多層防御ではなく、これが唯一の到達経路になった）

@@ -45,11 +45,40 @@ if echo "$COMMAND" | grep -qE '(gh\s+pr\s+create|poll_pr_reviews)'; then
   exit $?
 fi
 
-# .env ファイルへのアクセスをブロック（Bash コマンド経由: cat/source/.env 等）
-# 注意: "git commit -m '... .env ...'" 等のコミットメッセージへの誤検知を防ぐため、
-# ファイルアクセスコマンド直後の引数として .env が現れるパターンのみブロックする
-if echo "$COMMAND" | grep -qE '(^|[[:space:];|&])(cat|less|head|tail|more|source|grep|\.)([[:space:]]+-[^[:space:];|&]+)*[[:space:]]+([^[:space:];|&]*/)?\.env([^[:space:];|&]*)?([[:space:];|&]|$)'; then
+# 機密ファイルへの Bash 経由アクセスをブロックする共通判定（#384）
+# 第1引数: ファイル名部分の正規表現（例: '\.env' / '(\.git-credentials|\.netrc)'）
+#
+# 設計方針と限界（過信しないこと）:
+#   - permissions.deny の `Read()` ルールは Bash 経由の cat を止めないため、本関数が第2層を担う
+#   - **コマンド列挙型のため完全防御ではない**。`python3 -c "open(...)"` 等の任意コードは塞げない。
+#     主防御は permissions.deny・コンテナ隔離側であり、本層は「うっかり漏洩」の抑止が目的
+#   - クォート（"file" / 'file'）とリダイレクト（`cmd < file`）経由も対象にする
+#   - **grep は対象に含めない**: `grep -rn .netrc docs/` のような文字列検索とファイル読み取りを
+#     正規表現で区別できず、正当な調査コマンドを止める実害が防御価値を上回るため
+#   - コマンド名の直後の引数だけを見るため、"git commit -m '... .env ...'" は誤検知しない
+_sensitive_file_access() {
+  _sfa_re="$1"
+  _sfa_cmds='cat|less|head|tail|more|source|cp|mv|install|base64|xxd|od|strings|tar|rsync|curl|\.'
+  _sfa_path="['\"]?([^[:space:];|&'\"]*/)?"
+  # コマンド経由: cat file / cp "file" dst / base64 ~/file
+  if echo "$COMMAND" | grep -qE "(^|[[:space:];|&])(${_sfa_cmds})([[:space:]]+-[^[:space:];|&]+)*[[:space:]]+${_sfa_path}${_sfa_re}"; then
+    return 0
+  fi
+  # リダイレクト経由: cmd < file
+  if echo "$COMMAND" | grep -qE "<[[:space:]]*${_sfa_path}${_sfa_re}"; then
+    return 0
+  fi
+  return 1
+}
+
+# .env ファイルへのアクセスをブロック
+if _sensitive_file_access '\.env'; then
   hook_block "BLOCK: .env ファイルへのアクセスは禁止されています"
+fi
+
+# git 認証情報ファイルへのアクセスをブロック（#384）
+if _sensitive_file_access '(\.git-credentials|\.netrc)'; then
+  hook_block "BLOCK: git 認証情報ファイル（.git-credentials / .netrc）へのアクセスは禁止されています"
 fi
 
 # 該当なし: 許可

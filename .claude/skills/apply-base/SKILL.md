@@ -1,6 +1,7 @@
 ---
 name: apply-base
 description: kai-kou/claude-code-repository-base（公開ベース）の汎用ルール・スキル定義・ハーネス一式を現在のリポジトリへ反映（適用・同期）する。「claude-code-base の内容を反映して」「claude-code-base を適用して」「ベースを反映して」「ベース設定を取り込んで」「claude-code-base で初期化して」「claude-code-base のアップデートを確認して適用して」「ベースのアップデート内容を確認して」等と依頼された時に使用する。前回適用時点からの更新内容（コミット一覧・手動手順が必要な更新）の確認も本スキルが担う。公開リポジトリのベースを git clone（クラウドでは gh の repo スコープ操作が 403 でブロックされるため git/MCP 経路）で取得して適用するため、ユーザーがコマンドを打つ必要はない。
+effort: medium
 ---
 
 > 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、

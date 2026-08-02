@@ -77,11 +77,14 @@
       "Read(**/id_ed25519)",
       "Read(**/.aws/**)",
       "Read(**/*service-account*.json)",
+      "Read(**/.git-credentials)",
+      "Read(**/.netrc)",
       "Write(.claude/settings.local.json)",
       "Edit(.claude/settings.local.json)"
     ]
   },
   "sandbox": {
+    "enabled": true,
     "autoAllowBashIfSandboxed": true,
     "network": {
       "allowedDomains": [
@@ -92,10 +95,16 @@
         "api.slack.com",
         "api.anthropic.com",
         "mcp.context7.com",
-        "context7.com"
+        "context7.com",
+        "api.cloudflare.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
       ]
     },
     "excludedCommands": [
+      "*tools/fetch_broker_secrets.sh*",
+      "*tools/setup_secrets_broker.sh*",
       "python3 *tools/verify_broker_migration.py*",
       "python3 *tools/finalize_broker_migration.py*",
       "python *tools/verify_broker_migration.py*",
