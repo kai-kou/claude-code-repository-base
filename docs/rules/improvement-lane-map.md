@@ -12,7 +12,7 @@
 |--------|--------|------------|---------|
 | **改善 Issue レーン** | `self-improvement-loop`（発見 / 整理 / 消化の 3 モード） | 横断レビューでの課題発見・起票 → 棚卸し（集計・重複統合・Epic 化・priority/sp 補完）→ 実装・マージ | 発見スロット / 消化スロット / R-1 ルーティン / 「セルフ改善して」「改善バックログを棚卸しして」「改善Issue消化して」 |
 | **振り返りレーン** | `retrospective` → `retro-try-handler` | ワークフロー完了・失敗時の KPT 生成と Try 起票 → Try Issue の実装・PR 化 | 各パイプラインの最終ステップ / 日次消化スロット / 「レトロスペクティブして」 |
-| **監査・衛生レーン** | `workflow-health-check`（監査ロジック本体）→ `project-sync`（衛生実行・軽量版の呼び出し側） | PR 健全性・Issue 状態の監査、Stale / Orphan / ラベル不整合の解消 | 週次の監査スロット / 日次の衛生スロット / 「ヘルスチェックして」「project-sync して」 |
+| **監査・衛生レーン** | `workflow-health-check`（監査ロジック本体）→ `project-sync`（衛生実行・軽量版の呼び出し側） | PR 健全性・Issue 状態の監査、Stale / Orphan / ラベル不整合の解消 | 週次ゲート（定期ルーティンに組み込む）/ 日次の衛生スロット / 「ヘルスチェックして」「project-sync して」 |
 
 `project-manager`（Issue / Milestone の個別 CRUD）・`waiting-user-handler`（`status:waiting-user` のトリアージ）・
 `skill-audit`（Agent Skills 資産の構造監査）・`audit-runner`（外部監査プロトコルによるセットアップ構成監査）は
