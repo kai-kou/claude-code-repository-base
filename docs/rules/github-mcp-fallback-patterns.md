@@ -77,6 +77,7 @@ GitHub API アクセス付きでセッションに attach されていないこ�
 | `gh run list`・`gh workflow list`・`gh api repos/{o}/{r}/actions/runs`・`/commits/{ref}/check-runs`・`/commits/{ref}/status` | ❌ | プロキシは通過するが GitHub App トークン権限不足「Resource not accessible by integration」→ MCP `actions_list` / `get_job_logs` / `get_check_run` |
 | `gh repo clone {o}/{r}` | ❌ exit 1 | 内部で API 解決を伴うため失敗 → `git clone https://github.com/...` |
 | `git clone/fetch/pull/push origin`・`git ls-remote` | ✅ | **git プロキシ経由（API プロキシとは別系統）**。07-26 も `git ls-remote origin` 成功を実測 |
+| `git push origin --delete <branch>` / `git push origin :refs/heads/<branch>`（リモートブランチ削除） | ❌ 経路なし | 4 回とも `send-pack: unexpected disconnect while reading sideband packet` で切断（存在しない ref を対象にした対照実験でも同じ切断＝ブランチ固有ではなく **ref 削除という操作自体を git プロキシが拒否**）。通常 push は同一プロキシで成功するため生存自体はしている。MCP にも delete 系ツールがない（`create_branch`/`list_branches` はあるが delete なし）。**クラウドセッションからブランチ削除を完遂する経路が存在しない**（#399・オーナーが GitHub UI の Branches 画面かローカル `git push origin --delete <branch>` で削除する） |
 | `mcp__github__*`（Issue・PR・レビュー・マージ・ファイル・search・Actions read） | ✅ | 従来どおり動作（07-26 に `list_pull_requests` / `issue_write` を実測確認）。**API プロキシを通らない** ため repo REST の 403 と無関係に生存する |
 | `tools/check_pending_pr_reviews.py` 等の gh 依存スクリプト | ✅ 設計どおり | gh 失敗を `gh_unavailable` / `GH_UNAVAILABLE`（exit 3）で明示し、サイレント縮退しない（§4） |
 
@@ -239,6 +240,7 @@ MCP は Issue・PR・レビュー・マージ・ファイル・search・Actions�
 | ラベル管理（作成・編集・削除・一覧） | `gh label create/edit/delete/list` | ❌ 書き込み系なし。read も `get_label`（単体取得）のみで一覧不可（§2 の代替手順参照） |
 | マイルストーン | `gh api repos/{o}/{r}/milestones` | ❌ 作成・一覧ツールなし（`issue_write` の `milestone` 番号指定のみ可） |
 | Release の作成・編集 | `gh release create/edit` | ❌ read のみ（`list_releases` / `get_latest_release` / `get_release_by_tag`） |
+| リモートブランチ / ref の削除 | `gh api -X DELETE repos/{o}/{r}/git/refs/heads/{branch}`・`git push origin --delete` | ❌ MCP に delete 系ツールなし（`create_branch`/`list_branches` のみ）。**git プロキシも ref 削除自体を拒否**（§1 実機検証マトリクス）ため git 経路の代替も不能。オーナーが GitHub UI か ローカル git で削除する（#399） |
 | Gist / Notifications / Discussions / Projects V2 | `gh gist` / `gh api notifications` 等 | ❌ セッション版に未提供。上流 github-mcp-server には gists / notifications / discussions / projects（`projects_list/get/write`・2026-01-28 changelog）の各 toolset が実装済みだが、クラウドセッションに配備される公式 MCP はそのサブセット |
 | 任意 API 呼び出し | `gh api {path}` / `gh api graphql` | ❌ 生 REST / GraphQL ツールなし。定義済みツールの範囲のみ |
 
