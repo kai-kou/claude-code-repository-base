@@ -31,6 +31,62 @@
 
 ---
 
+## 2026-08-02（下流リポジトリの実測監査からの還流）機密ファイルガードを全面刷新（下流で同ファイルを独自改変している場合は差し替えてください）
+
+**変更内容**:
+
+- `.claude/hooks/pre-tool-use-router.sh` の機密ファイル判定を、正規表現一発から **段階判定** に作り直した。
+  ① 候補トークン抽出 → ② 秘密ディレクトリ（`~/.ssh` / `~/.aws` / `~/.gnupg`）→ ③ ベース名スコープの
+  拡張子判定・語境界判定 → ④ 文書拡張子は除外。
+- **塞いだ取りこぼし**（下流で実測・いずれも旧実装では素通り）:
+  - コマンド置換・サブシェル経由（`echo "$(cat ~/.ssh/id_rsa)"` / `` `cat …` `` / `(cat …)`）。
+    境界文字集合に `(` とバッククォートが無かった。**`.env` ガードも同じ穴を持っていた**。
+  - 前置語つきの実ファイル名（`gcp-service-account.json` / `gcp-credentials.json` / `backup-id_rsa` /
+    `~/.aws/my-credentials`）。旧実装はベース名先頭一致限定だった。
+  - 対象ファイル種別を `.git-credentials` / `.netrc` の 2 種から、鍵・証明書（`*.pem` / `*.key` /
+    `*.p12` / `*.pfx` / `*.jks` / `*.keystore`）と認証情報の語（`credentials` / `service-account` /
+    `id_rsa` 系）へ拡張した。
+- **解消した誤検知**（下流で実測。うち 1 件は監査セッション自身がライブで踏んだ）:
+  `cat config/credentials/README.md`（ディレクトリ名の一致）・`cat notes/service-accountability.md`
+  （部分語の一致）・`find . -name credentials` / `ls . credentials` / `git status . x`
+  （`_sfa_cmds` の `\.`＝dot source がカレントディレクトリ引数と区別できなかった）。
+- **議論型レビューで追加是正した 4 点**（配布元での採用時に実測・#393）:
+  - 公開鍵 `id_rsa.pub` が語境界判定でブロックされていた → `*.pub` を除外に追加。
+  - `docs/.ssh/README.md` のような文書パスが秘密ディレクトリ判定に先取りされていた
+    → 文書拡張子の除外を秘密ディレクトリ判定より **先に** 評価する順序へ変更。
+  - 秘密ディレクトリ判定が末尾スラッシュ必須・大文字小文字区別だったため
+    `cp -r ~/.ssh /tmp` / `cat ~/.SSH/config` が素通りしていた → `(/|$)` アンカー + `-i` へ。
+  - dot source を対象から外したことで `. .env` が素通りしていた（`source .env` は塞がるのに
+    POSIX 上の同義語である `. .env` が通る非対称）→ **コマンド位置（行頭 or 区切り直後）の `.` に
+    限定して** 抽出し直し、`find . -name credentials` 等の誤ブロックは再発させない。
+- **Layer 1 セルフレビューで追加是正した 3 点**（#396）:
+  - 文書拡張子の除外が秘密ディレクトリ判定より先に効いていたため、`~/.ssh/id_rsa.md` のように
+    **拡張子を変えるだけでディレクトリ保護を無効化できた** → 秘密ディレクトリ判定を先に評価する順序へ戻し、
+    一致条件を **ホーム基準・絶対パス・先頭要素** に限定して `docs/.ssh/README.md` の誤検知は回避したまま解消。
+  - 拡張子・語境界の判定が大文字小文字を区別し `foo.PEM` / `ID_RSA` が素通りしていた
+    （秘密ディレクトリ判定だけ `-i` で不整合）→ 小文字化した文字列で判定するよう統一。
+  - ブロックメッセージの「語を含むファイル」という文言が実際の語境界判定より緩く読めた → 「語境界で一致」に修正。
+- `tools/test_sensitive_file_guard.sh` を追加（BLOCK 36 / ALLOW 20 の 56 ケース）。
+  **ALLOW 側のケースを削らないこと** — 誤検知で通常運用が止まる実害は、取りこぼしと同じ重さで扱う。
+- `docs/rules/security-posture-controls.md` に deny の **cwd アンカー射程**（cwd 内は Bash の `cat` にも
+  deny が効く／cwd 外は射程外）と、第2層の判定限界・任意サブプロセスを塞げない恒久的限界を明記した。
+
+**下流で必要な手動手順**:
+
+1. `apply-to-repo.sh` を再実行して `.claude/hooks/pre-tool-use-router.sh` と
+   `tools/test_sensitive_file_guard.sh` を同期する。
+2. **`pre-tool-use-router.sh` に下流固有の分岐を足している場合は上書きで消える**。同期前に
+   `git diff` で自リポジトリ側の追加分岐（MCP 経路のガード・プロジェクト固有チェック等）を確認し、
+   新実装の上へマージし直す。
+3. 同期後に `bash tools/test_sensitive_file_guard.sh` を実行し `FAIL=0` を確認する
+   （`package.json` を持つリポジトリは `"test:sensitive-file-guard": "bash tools/test_sensitive_file_guard.sh"` を
+   登録して `npm run test:sensitive-file-guard` で回せるようにする）。
+4. `docs/rules/security-posture-controls.md` §1.1 の deny 列挙を **自リポジトリの実 `settings.json` から
+   写し直す**（雛形の列挙をそのまま残すと「設定済みだから安全」という誤った前提が生まれる。
+   下流で実際に desync していた）。
+
+---
+
 ## 2026-08-02（Issue #389）`audit-runner` スキルを追加（定期実行するかどうかを選んでください）
 
 **変更内容**:
