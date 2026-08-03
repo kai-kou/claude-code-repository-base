@@ -2,6 +2,7 @@
 name: workflow-health-check
 description: 開発・運用ワークフローの健全性（PR 健全性・Issue 状態・パイプライン整合性・retro-try フィードバックループ・CLAUDE.md/常駐ルール肥大化）を自動監査し、問題を検出したら根本原因を特定して自動修正するスキル。「ワークフロー監査して」「ヘルスチェックして」「/workflow-health-check」と依頼された時に使用する。完全版は手動起動またはプロジェクトの定期ルーティンに組み込んだ週次ゲートから、軽量版（PR 健全性 + Issue 状態のみ）は日次の衛生スロット（project-sync 開始時）から実行される。監査ロジックの主体は本スキルで、project-sync は本スキルの軽量版を呼び出す側（主従関係）。
 effort: low
+allowed-tools: Bash, Read, mcp__github__list_issues, mcp__github__issue_read, mcp__github__issue_write, mcp__github__add_issue_comment, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__actions_list, mcp__github__create_pull_request, mcp__github__merge_pull_request, mcp__Claude_Code_Remote__list_triggers
 ---
 
 # workflow-health-check スキル

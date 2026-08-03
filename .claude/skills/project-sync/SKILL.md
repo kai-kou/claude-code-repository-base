@@ -3,6 +3,7 @@ name: project-sync
 description: リポジトリ衛生管理スキル。Stale Issue（4時間超 in-progress）検出・Orphan PR（24時間超放置）解消・Abandoned ブランチ検出を自動実行する。「project-sync して」「リポジトリを整理して」「/project-sync」で起動する。プロジェクト定義の衛生スロットで自動実行される。受動的な衛生掃除が役割で、Issue 作成・進捗更新など能動的なタスク運用は project-manager を使う。
 effort: low
 model: haiku
+allowed-tools: Bash, Read, Skill, mcp__github__list_issues, mcp__github__issue_read, mcp__github__issue_write, mcp__github__list_issue_fields, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__merge_pull_request, mcp__github__add_issue_comment, mcp__github__search_issues
 ---
 
 > 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
