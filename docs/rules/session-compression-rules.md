@@ -19,14 +19,7 @@
 
 実体は `docs/rules/`、`.claude/rules/` は symlink（圧縮後もリンク先が再解決されるため正常に動作する）。タスク依存ルールは `docs/rules/` のみに置き、スキル起動時に Read する。
 
-**新規ルールファイル追加時の必須手順**:
-1. `docs/rules/{名前}.md` に実体を作成
-2. `ln -s ../../docs/rules/{名前}.md .claude/rules/{名前}.md`
-3. `./tools/check_rules_sync.sh` で検証
-4. **Hot 層予算内か確認**（`cat .claude/rules/*.md | wc -c` と `token-optimization-rules.md` の予算値を突き合わせ、超過するなら Warm 降格 or 既存ファイルの追加圧縮を先に検討する）
-5. 両方を `git add` してコミット
-
-手順 2 を忘れるとルールが読み込まれないが、`session-start.sh` / `post-compact.sh` が `check_rules_sync.sh --fix` で自動検出・修正する。
+**新規ルールファイル追加時**: `docs/rules/{名前}.md` に実体を作成 → symlink → `check_rules_sync.sh` で検証 → Hot 予算確認 → コミット、の 5 手順（詳細・コマンド全文は `session-compression-rules-detail.md`）。symlink 作成を忘れても `session-start.sh` / `post-compact.sh` が `check_rules_sync.sh --fix` で自動検出・修正する（ハーネスが既に強制するレイヤーのため、Hot では手順を省略）。
 
 ## 圧縮に備えた情報の置き場所
 
