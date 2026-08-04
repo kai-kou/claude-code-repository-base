@@ -172,35 +172,17 @@ gh variable delete SLACK_BOT_TOKEN -R __OWNER__/__REPO__
 | `SLACK_PUBLISH_CHANNEL_ID` | 公開・マーケティング専用チャンネルID（publish 通知の送信先。未設定時は `SLACK_APPROVAL_CHANNEL_ID` にフォールバック） | 推奨 | `C0ZZZZZZZZZ` |
 | `SLACK_CODE_CHANNEL_ID` | コード関連通知専用チャンネルID（将来予約。現時点では `slack_notify.py` に実装なし。未設定でも動作に影響なし） | 任意 | `C0WWWWWWWWW` |
 | `SLACK_MENTION_USER_ID` | `approval` / `waiting` / `publish` 通知でメンションするユーザーID（未設定時はメンションなし） | △ | `U0XXXXXXXXX` |
-| `GEMINI_MCP_AUTH_TOKEN` | Gemini Image MCP サーバー Bearer トークン（Cloudflare Workers 側の secret `AUTH_TOKEN` と同じ値） | 画像生成時 | 任意の文字列 |
-| `GEMINI_API_KEY` | Gemini API キー（MCP サーバー内部で使用。Claude Code からは直接不要） | MCP サーバー側で設定済み | `AIza...` |
-| `YOUTUBE_CLIENT_ID` | YouTube OAuth クライアントID | 動画公開時 | `...apps.googleusercontent.com` |
-| `YOUTUBE_CLIENT_SECRET` | YouTube OAuth クライアントシークレット | 動画公開時 | `GOCSPX-...` |
-| `YOUTUBE_REFRESH_TOKEN` | YouTube OAuth リフレッシュトークン（**必須スコープ**: `youtube` + `youtube.force-ssl` + `yt-analytics.readonly` の3つ全て。スコープが変わったら再発行が必要。手順: `--auth-setup` 参照） | 動画公開時 | `1//0g...` |
-| `YOUTUBE_CHANNEL_ID` | YouTubeチャンネルID | オプション | `UC...` |
-| `YOUTUBE_API_PROXY_URL` | YouTube API プロキシ URL（AWS Lambda or Cloudflare Workers） | クラウド環境必須 | `https://{id}.execute-api.ap-northeast-1.amazonaws.com/prod` |
-| `YOUTUBE_API_PROXY_AUTH_TOKEN` | プロキシ認証トークン | `PROXY_URL` 設定時 | 任意の文字列 |
-| `YOUTUBE_UPLOAD_PROXY_INSECURE` | YouTube アップロードプロキシの TLS 証明書検証を無効化（`1` / `true` / `yes` で有効）。GCP 環境のプロキシ自己署名証明書対応 | 動画アップロード時 | `1` |
-| `AWS_ACCESS_KEY_ID` | AWS IAM アクセスキーID（Lambda デプロイ用） | Lambda デプロイ時 | `AKIA...` |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM シークレットアクセスキー（Lambda デプロイ用） | Lambda デプロイ時 | 40文字の英数字 |
-| `GCP_PROJECT` | GCP プロジェクトID（BGM生成） | BGM生成時 | `your-gcp-project` |
-| `GCP_LOCATION` | GCP リージョン（BGM生成） | BGM生成時 | `us-central1` |
-| `VOICEVOX_ENDPOINT` | VOICEVOX Engine エンドポイント | ローカルのみ | `http://localhost:50021` |
-| `QIITA_TOKEN` | Qiita パーソナルアクセストークン（`QIITA_API_TOKEN` も後方互換） | SNS配信（Qiita）時 | `xxxxxxxxxxxx` |
-| `QIITA_ARTICLE_ID_{VIDEO_ID}` | Qiita 記事ID（更新時に使用） | Qiita 記事更新時 | `0123456789abcdef` |
-| `X_BEARER_TOKEN` | X API v2 Bearer Token（読み取り専用・X Developer Portal で取得。未設定時は X_API_KEY + X_API_SECRET から自動生成） | X投稿監視時 | `AAAA...` |
-| `X_API_KEY` | X (Twitter) API キー（Consumer Key） | SNS配信（X）時・X_BEARER_TOKEN 未設定時の自動生成 | `xxxxxxxxxxxx` |
-| `X_API_SECRET` | X API シークレット（Consumer Secret） | SNS配信（X）時・X_BEARER_TOKEN 未設定時の自動生成 | `xxxxxxxxxxxx` |
-| `X_ACCESS_TOKEN` | X アクセストークン | SNS配信（X）時 | `xxxxxxxxxxxx` |
-| `X_ACCESS_TOKEN_SECRET` | X アクセストークンシークレット | SNS配信（X）時 | `xxxxxxxxxxxx` |
-| `X_OWNER_HANDLE` | X 予算枯渇時に @mention 通知を飛ばすオーナーハンドル（@なし・空文字で X 通知を無効化）。予算監視ツールを実装するプロジェクトで使用（プロジェクト例・本ベースにツール実体なし） | △（手動課金の気づき通知） | `your_x_handle` |
-| `BLUESKY_HANDLE` | Bluesky ハンドル | SNS配信（Bluesky）時 | `yourname.bsky.social` |
-| `BLUESKY_APP_PASSWORD` | Bluesky アプリパスワード | SNS配信（Bluesky）時 | `xxxx-xxxx-xxxx-xxxx` |
-| `R2_ACCESS_KEY_ID` | Cloudflare R2 API トークンのアクセスキー ID | **音声・画像・動画の主要メディア管理（常時必要）** | `xxxxxxxxxxxx` |
-| `R2_SECRET_ACCESS_KEY` | Cloudflare R2 API トークンのシークレットアクセスキー | **音声・画像・動画の主要メディア管理（常時必要）** | `xxxxxxxxxxxx` |
-| `R2_ACCOUNT_ID` | Cloudflare アカウント ID | **音声・画像・動画の主要メディア管理（常時必要）** | `xxxxxxxxxxxx` |
-| `R2_BUCKET_NAME` | R2 バケット名（デフォルト: `__REPO__-videos`） | 任意 | `__REPO__-videos` |
-| `R2_PUBLIC_DOMAIN` | R2 パブリックバケットのカスタムドメイン（未設定時は r2.dev ドメイン） | 任意 | `media.<your-account>.workers.dev` |
+
+本ベースが標準で使うのは上記の `SLACK_*` だけ。**外部 API のトークン等、プロジェクト固有の変数は
+各プロジェクトが本表に追記する**（ベース側には一切ハードコードしない）。`setup_github_variables.py` も
+プロジェクト固有変数を持たず、`MANAGED_GITHUB_VARS` 環境変数（カンマ区切り）で管理対象を注入する。
+
+```bash
+export MANAGED_GITHUB_VARS="YOUR_API_KEY,YOUR_SERVICE_TOKEN"
+python3 tools/setup_github_variables.py --list
+```
+
+追記するときは同じ 4 列（変数名 / 用途 / 必須 / 値の例）を守り、**値そのものは書かない**（例は形式だけ示す）。
 
 ### Claude Code 最適化変数
 
@@ -263,7 +245,7 @@ Claude Code のコンテキストやターミナルへの **平文流出** を�
 | `python3 tools/gh_vars.py --json` | `gh variable list --json name,value` |
 | `python3 tools/gh_vars.py` （名前のみ） | `gh variable get TOKEN_NAME` を目視確認目的で使用 |
 
-**理由**: `gh variable list` を Bash ツールで実行すると全変数の値が平文で Claude のコンテキストに流れ込む（NOTE_COOKIES_JSON など Cookie データも含む）。2026-06-06 セッションで実地確認済み（P-12）。
+**理由**: `gh variable list` を Bash ツールで実行すると全変数の値が平文で Claude のコンテキストに流れ込む（トークン・Cookie などの長大な機密値も含む）。実地確認済み（P-12）。
 
 > **例外**: `session-start.sh` のように `gh variable list ... --json name,value` の出力を **対話的な stdout 表示なしで変数に取り込む** 用途は許容する（値はログに出力せず `export` と `CLAUDE_ENV_FILE` への書き出しのみ）。禁止しているのは「値を対話的に stdout 表示する用途」であり、値をログに出さずに処理するパイプ・変数取り込みの用途は含まない。
 

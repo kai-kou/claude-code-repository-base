@@ -1,10 +1,191 @@
 # claude-code-base
 
-**Claude Code（特に Claude Code on the web / クラウド実行環境）で「自律運用する AI エージェント開発」を始めるための汎用ベース。**
+**Claude Code に「毎回同じ指示」をしなくて済むようにする、自律運用の土台。**
 
-YouTube 動画自動制作パイプライン（個人プロジェクト）で実運用・検証されたワークフロー・ルール・スキル・ハーネスから、
-**ドメイン（動画制作）に依存しない汎用部分だけ** を抽出してパッケージ化したもの。
-動画・音声・画像・SNS など制作特化の資産は含まない。別目的のワークフロー構築の土台として使う。
+ルール・スキル・フック・ツールを一式で導入し、実装から PR・マージまでを人間の確認を挟まず進める運用を、
+安全弁つきで敷くための汎用ベース。GitHub リポジトリならドメインを問わず使える。
+
+## このベースで何ができるようになるか
+
+**保証レベル** の見方 — 🔒 は導入すればフック / スクリプトが機械的にそうするもの。📋 は運用ルールとして
+定義され、Claude がそれに従って動くもの（詳細は「2 つの強度」）。
+
+| 導入前によくある状態 | 導入後 | 保証 | 実現している資産 |
+|---|---|---|---|
+| セッションを開くたび「main に直接 push しないで」「作業ブランチを切って」と言い直している | ルール一式が `.claude/rules/` に常駐し全セッションで自動読込される。自分でルールを書き起こす必要がない | 📋 | `CLAUDE.md` / `docs/rules/` / `.claude/rules/`（symlink） |
+| うっかり `main` へ push してしまう / 事故が怖くて自律実行させられない | `main` / `master` への直接 push が **物理的にブロック** される | 🔒 | `.claude/hooks/pre-git-push-check.sh` |
+| `.env` や鍵ファイルを読ませてしまう事故が怖い | `.env`・秘密鍵・認証情報ファイルへのアクセスがブロックされる。Bash 経由はフック、Read / Write 経由は権限設定で二重に塞ぐ（`.env.example` 等のテンプレートは通す） | 🔒 | `.claude/hooks/pre-tool-use-router.sh` / `.claude/settings.json` の `permissions.deny` |
+| 実装のたび「PR 作っていいですか」と聞かれ、レビューとマージを自分で追いかけている | 実装 → セルフレビュー → PR 作成 → 指摘対応 → マージまで、確認を挟まず進める運用ルールになっている | 📋 | `docs/rules/pr-review-flow-summary.md` / `pr-review-watcher`・`code-review`・`self-reviewer` スキル |
+| 未コミットのまま PR が作られて中身が空になる | 未コミット / 未 push 状態、セルフレビューの機械チェックが Error の状態では PR 作成がブロックされる | 🔒 | `.claude/hooks/pre-pr-create-check.sh` |
+| 長い会話でコンテキスト圧縮が起きると作業中の変更を見失う | 圧縮の前後で未コミット変更が自動 commit & push される（**クラウド実行環境のみ**・作業ブランチ限定。ローカル CLI では発火しない） | 🔒 | `.claude/hooks/pre-compact.sh` / `post-compact.sh` |
+| 「〇〇していいですか」が頻発し、監督しないと進まない | 確認を求めるのは A-1〜A-6 の 6 種と定義され、それ以外は自律実行する運用方針になっている | 📋 | `docs/rules/user-confirmation-minimization.md` |
+| 「なぜこの変更をしたか」がチャット履歴に埋もれて後から追えない | 実質的な作業指示を Issue 化し、意図と完了条件をラベル付きで残す運用ルールになっている | 📋 | `docs/rules/user-instruction-issue-rules.md` / `project-manager` スキル |
+| 同じセットアップを別リポジトリへ手作業でコピーしている | 対象リポジトリでワンコマンド（または自然文一つ）で導入でき、再実行するだけで最新へ同期できる | 🔒 | `scripts/apply-to-repo.sh` / `apply-base` スキル |
+
+放置 Issue・マージされない PR・使われないブランチの整理は `project-sync` / `workflow-health-check` スキルとして
+同梱しているが、**定期的に走らせるかどうかは利用者側の設定次第**（Claude Code の Scheduled Tasks 等で起動する）。
+導入しただけで自動的に定期実行されるわけではない。
+
+## クイックスタート
+
+### A. 新規プロジェクトの土台にする
+
+```bash
+git clone https://github.com/kai-kou/claude-code-repository-base your-project && cd your-project
+
+# プレースホルダ置換 + symlink 同期（不要モジュールがあれば modules.yaml を編集後 --prune）
+bash scripts/bootstrap.sh --repo your-org/your-repo --name "Your Project" --tz Asia/Tokyo --prune
+
+$EDITOR docs/project-mission.md   # ミッションを記入（CP-5 の実体）
+$EDITOR CLAUDE.md                 # 応答スタイル・PR 自律化方針を確認・調整
+```
+
+### B. 既存リポジトリへ後付けする
+
+対象リポジトリのルートで実行すると、ルール・スキル・ハーネス・ツールだけが展開される。
+
+```bash
+# git だけで動く（gh は任意）。対象リポジトリの slug は git remote から自動判定
+curl -fsSL https://raw.githubusercontent.com/kai-kou/claude-code-repository-base/main/scripts/apply-to-repo.sh | bash
+```
+
+`CLAUDE.md` / `docs/project-mission.md` は **プロジェクト固有のため既定では上書きせず**、ベース版を `*.base` として
+横に置く。**冪等** なので、ベース更新後に再実行すれば最新へ同期できる。
+オプション（`--prune` / `--tz` / `--ref` / `--dry-run` / `--check-updates` 等）は
+[`docs/apply-to-existing-repo.md`](docs/apply-to-existing-repo.md) を参照。
+
+## ユーザー確認が必要なのはこの 6 つ
+
+「確認を挟まず進める」と言っても、人間の判断を残す境界がある。`docs/rules/user-confirmation-minimization.md` が
+**既約境界外（A-1〜A-6）** として定義し、これ以外では確認を求めない運用方針にしている。
+
+| # | 確認が必要なアクション | なぜ |
+|---|---------------------|------|
+| A-1 | `main` ブランチへの直接 push | 保護ブランチ。誤マージが不可逆（**これはフックでも物理的にブロックされる**） |
+| A-2 | 取り消し困難な外部公開の即時手動実行 | 公開後に取り消せない |
+| A-3 | 品質ゲートが **致命的 NG** のときの続行判断 | 誤りを世に出すリスク |
+| A-4 | サーキットブレーカー（修正サイクル 2 回超）発動後の続行判断 | 無限ループ・予算浪費の防止 |
+| A-5 | 新規マイルストーンの追加 | プロジェクト計画の骨格に影響 |
+| A-6 | **アカウント設定・課金設定の変更**（Billing・クレジット購入・API 有効化・OAuth 再発行） | ユーザー個人アカウントの権限が物理的に必要 |
+
+A-1 以外は運用ルールとして定義されたもので、フックが物理的に止めるわけではない。「導入すれば人間が
+一切関与しなくてよくなる」ものではないことに注意する。
+
+## 2 つの強度（機械強制と運用ルール）
+
+このベースが提供するものは、強度の異なる 2 層でできている。README のアウトカム表の 🔒 / 📋 はこの区別を指す。
+
+- **🔒 機械強制（Lv3）** — `.claude/hooks/*.sh` と `tools/*.py` が、Claude の判断を経ずに発火する。
+  `main` 直 push ブロック・秘密ファイルアクセスブロック・PR 作成前チェック・圧縮前後の自動コミットが該当する。
+  **導入すればスクリプトが必ず実行される**（ただし各スクリプトには発火条件がある。
+  例えば圧縮前後の自動コミットはクラウド実行環境の作業ブランチに限定されている。
+  条件はスクリプト冒頭のコメントに書いてある）。
+- **📋 運用ルール（Lv1〜2）** — `CLAUDE.md` と `docs/rules/*.md` に書かれた方針で、Claude がそれを読んで従う。
+  PR 自律化・確認最小化・Issue 化・マルチセッション調停が該当する。指示遵守に依存するため、
+  常に同じ結果になることを保証するものではない（品質ゲートやサーキットブレーカーで停止する設計になっている）。
+
+**主張を鵜呑みにする必要はない**: `main` 直 push が本当にブロックされるかは
+[`.claude/hooks/pre-git-push-check.sh`](.claude/hooks/pre-git-push-check.sh) を読めば確認できる。
+🔒 と書かれた項目はすべて、対応するスクリプトを読んで検証できる。
+
+## 何が入っているか
+
+読者の目的別に束ねると、以下の 4 つに整理できる。
+
+| 目的 | 中身 |
+|------|------|
+| **指示を覚えておく** | 大原則 CP-1〜6・確認最小化（A-1〜A-6）・通知トリアージ・セッション安全 / 圧縮 / 並行制御 / スプリント・教訓管理（Hot / Warm / Cold の 3 層）などのルール（`docs/rules/` に実体、`.claude/rules/` に常駐 symlink）+ 圧縮前後の自動コミットフック |
+| **PR を見届ける** | `pr-review-watcher` / `code-review` / `self-reviewer` / `discussion-review`（議論型レビュー）スキル + `pre-git-push-check` / `pre-pr-create-check` / `stop-router`（未コミット・未 PR 検知）フック |
+| **リポジトリの衛生を保つ** | `project-manager` / `project-sync` / `workflow-health-check` / `waiting-user-handler` / `checkpoint` スキル + `retrospective` / `retro-try-handler` / `self-improvement-loop` / `skill-audit` の改善ループ + `check_pending_pr_reviews.py` ほかの `tools/` |
+| **別のリポジトリへ配る** | `apply-base` / `claude-code-spec-sync` スキル + `scripts/bootstrap.sh` / `scripts/apply-to-repo.sh` / `modules.yaml` |
+
+そのほか、サブエージェント定義（`.claude/agents/owner.md` = プロダクトオーナーロール）、
+スラッシュコマンド（`/next` 次のタスク自律判定・`/status` 現状把握）、
+`.claude/settings.json`（権限・サンドボックス・フック配線のテンプレート）を同梱する。
+
+## 何が入っていないか
+
+含まれるのは **ルール・スキル・ハーネス・ツールからなる汎用ワークフロー基盤だけ** で、
+特定ドメインの制作・配信を自動化する資産は入っていない。具体的には、音声合成・画像生成・
+動画レンダリング・SNS や記事プラットフォームへの投稿パイプライン、およびそれらに紐づく
+ルール・スキル・ツールは含まない。**導入しても何かのコンテンツが自動生成されるわけではない。**
+
+そうしたドメイン版を作る場合は、本ベースを土台に該当モジュールを追加する（`skill-creator` スキルを使う）。
+
+## 前提
+
+- **Claude Code** — Claude.ai 経由のサブスクリプションが必要（クラウド実行環境 / ローカル CLI のどちらでも動作する）
+- **Python 3.10 以上** — `tools/*.py` の実行に必要。外部依存は `PyYAML` のみ（`requirements.txt`）
+- **GitHub リポジトリ** — PR 自動化・Issue 管理の土台。クラウド実行では `GH_TOKEN` は未設定のままでよい（プロキシが認証を注入する）
+- 任意 — Slack（完了通知用）・`context7` の API キー（MCP 経由のドキュメント取得用）
+
+**ドキュメント・ルール・スキル定義はすべて日本語で書かれている**（英語版は提供していない）。
+既定の応答スタイルも日本語のため、別の言語で運用する場合は `CLAUDE.md`「応答スタイル」節と
+`.claude/output-styles/` を書き換える。
+
+動作確認は Linux / macOS。Windows はネイティブ環境では未検証（ハーネスが bash スクリプトのため WSL を推奨）。
+クラウド実行環境では `gh` CLI がプリインストールされておらず、GitHub 操作は `mcp__github__*` が一次経路になる
+（README 内の `gh` を使う例はローカル実行向け）。
+
+## 詳細ガイド
+
+### プレースホルダ
+
+`scripts/bootstrap.sh` が以下を置換する（手動置換も可）。
+
+| プレースホルダ | 置換後 |
+|--------------|--------|
+| `__OWNER__/__REPO__` / `{{REPO_SLUG}}` | `owner/repo`（`tools/` が参照する対象リポジトリ） |
+| `{{PROJECT_NAME}}` | プロジェクト名 |
+| `{{PROJECT_DESCRIPTION}}` | プロジェクト説明 |
+
+配布時点では `tools` / `hooks` に `__OWNER__/__REPO__` が残っており、bootstrap 実行前はリポジトリ依存ツールが
+動かない（テンプレートの正常な状態）。`PROJECT_REPO` 環境変数でも上書きできる。
+
+### モジュールの有効 / 無効
+
+`modules.yaml` で管理する。`core-principles` と `session-safety` は `required:true`（外せない土台）。
+不要なモジュール（例: `slack-notify`・`ci-helpers`）を `enabled: false` にして
+`bash scripts/bootstrap.sh --repo ... --prune` を実行すると、該当する rules / hooks / skills / tools を除去する。
+
+手動で外す場合は、ルールなら `.claude/rules/<name>.md`（symlink）を削除（実体は `docs/rules/` に残る）、
+スキルなら `.claude/skills/<name>/` を削除、フックなら `.claude/settings.json` の `hooks` から該当エントリを削除する。
+
+### ルールの 3 層構造
+
+- **Hot**（`.claude/rules/` 常駐 symlink・全セッション自動読み込み）: 全セッション横断で必須なクリティカル規範のみ
+- **Warm**（`docs/rules/lessons/<category>.md` ほか・タスク依存で Read）: カテゴリ別の教訓・詳細版
+- **Cold**（git 履歴）: 昇格済みエントリは物理削除して履歴に委ねる
+
+`tools/lessons_guard.py` が Hot 層の行数・エントリ数上限を機械強制する。
+
+### アップデートの取り込み
+
+適用済みリポジトリでは `bash apply-to-repo.sh --check-updates` で、前回適用以降の更新内容だけを確認できる。
+このとき [`docs/base-update-notes.md`](docs/base-update-notes.md)（**手動対応が必要な更新だけを記録した
+append-only のノート**）から、前回適用日以降のエントリが自動で抜粋表示される。通常の更新は再実行だけで同期される。
+
+### Plugin / MCP として使う
+
+clone / テンプレート利用に加え、**Claude Code Plugin** としても読み込める。
+
+- `.claude-plugin/plugin.json`: Plugin マニフェスト（メタデータ + `skills` / `agents` のパス宣言）
+- `.mcp.json`: プロジェクトスコープの MCP サーバ定義（`context7` / `github`）。環境変数は `${VAR:-default}` 展開で、未設定でも config 解析が壊れない
+
+```bash
+export GH_TOKEN=ghp_xxx              # github MCP（既定 https://api.githubcopilot.com/mcp/）
+export CONTEXT7_API_KEY=ctx_xxx      # context7（任意・未設定でも匿名で動作）
+
+claude plugin marketplace add kai-kou/claude-code-repository-base
+claude plugin install claude-code-base
+claude plugin validate .
+```
+
+> **注意** （フックの扱い）: 本ベースのフック（`main` 直 push ブロック等）は `.claude/settings.json` に登録されており、
+> **clone / テンプレート利用では自動で有効** になる。Plugin インストール経由でのフック配布（`hooks/hooks.json` 形式）は
+> 未対応のため、ガードレールが必要な場合は clone 利用を推奨する。
+
+## エージェント向け入口
 
 > **🤖 エージェントへ（このベースを対象リポジトリへ反映する手順）**: ユーザーから
 > 「claude-code-base の内容を（このリポジトリに）反映して／適用して」等と言われたら、
@@ -22,168 +203,9 @@ YouTube 動画自動制作パイプライン（個人プロジェクト）で実
 >
 > クラウドセッションで `git clone` が使えない場合は `mcp__github__get_file_contents` で
 > `scripts/apply-to-repo.sh` を取得して実行する。**`gh api repos/...` は一次経路にしない**
-> （クラウドでは 403・`gh` 自体もプリインストールされない・L-114）。ローカル端末で gh が
-> 使える環境なら `gh api repos/kai-kou/claude-code-repository-base/contents/scripts/apply-to-repo.sh
-> -H "Accept: application/vnd.github.raw" | bash` でもよい。
+> （クラウドでは 403・`gh` 自体もプリインストールされない）。
 >
-> 詳細・オプションは [`docs/apply-to-existing-repo.md`](docs/apply-to-existing-repo.md)。
 > 初回適用後は同梱の `apply-base` スキルが入るため、以降は同じ自然文で再同期が起動する。
-
-## 設計思想
-
-- **全部入りで配布 → プロジェクトごとに不要なものを外す（opt-out）**。`modules.yaml` でモジュール単位の有効/無効を管理する
-- **Human-on-the-loop（監視型）**: ユーザーは結果を確認するだけ。Claude が判断・実装・PR・マージまで自律実行する（CP-6）
-- **多層ハーネス**: ドキュメント（Lv1）→ AI セマンティック（Lv2）→ フック（Lv3）→ CI（Lv4）でルールを段階的に強制する
-
-## 何が入っているか
-
-| 区分 | 内容 |
-|------|------|
-| **ルール**（`docs/rules/`・`.claude/rules/` に常駐 symlink） | 大原則 CP-1〜6 / 確認最小化（A-1〜A-6）/ 通知トリアージ / セッション安全・圧縮・並行制御・スプリント / PR レビューフロー / 障害調査プロトコル / 教訓管理（3層）/ ハーネス昇格 / Agent Teams / トークン最適化 ほか |
-| **スキル**（`.claude/skills/`・全 18 個） | 配布・同期: apply-base / base-harvest / claude-code-spec-sync ・ PR / レビュー: pr-review-watcher / self-reviewer / code-review / discussion-review ・ 運用衛生: project-manager / project-sync / workflow-health-check / waiting-user-handler / checkpoint ・ 改善ループ: retrospective / retro-try-handler / self-improvement-loop / skill-audit ・ 調査 / 生成: research-runner / skill-creator |
-| **エージェント**（`.claude/agents/`） | owner（プロダクトオーナー PO ロール・`sp:*`/`priority:*` ラベル操作のみ許可）。プロジェクト固有のレビュー役・監修役を追加可能 |
-| **ハーネス**（`.claude/hooks/`） | session-start / pre-tool-use-router（main 直 push ブロック・PR 前チェック・.env ブロック）/ pre-git-push-check / pre-pr-create-check / post-tool-use-validate（拡張ポイント）/ post-tool-use-failure / post-compact / stop-router（git/PR/WIP）/ subagent-stop / permission-request-auto-allow |
-| **ツール**（`tools/`） | slack_notify / triage_notification / check_pending_pr_reviews / lessons_guard ほか教訓管理 / github_push_helper / generate_project_context / sprint メトリクス / CI ヘルパー / gh variables 管理（ローカル実行専用）ほか |
-| **コマンド**（`.claude/commands/`） | `/next`（次のタスク自律判定）/ `/status`（現状把握） |
-| **設定** | `.claude/settings.json`（権限・サンドボックス・フック登録のテンプレート） |
-
-## 何が入っていないか（意図的に除外）
-
-動画制作パイプライン特化の資産は除外している:
-- 台本 / 音声（VOICEVOX）/ 画像（gpt-image・Gemini）/ BGM / Remotion レンダリング / サムネイル
-- YouTube / Shorts / TikTok / Instagram / note / Qiita / Zenn / X・Bluesky の各パイプライン
-- キャラクター設定・SNS オーガニック運用・マーケティング・テーマ発見・リサーチ自動化
-- これらに紐づくルール（`audio-pipeline-rules.md`・`youtube-*.md` 等）・スキル・ツール
-
-> これらが必要な別ドメイン版を作る場合は、本ベースを土台に該当モジュールを追加する（`skill-creator` を使う）。
-
-## 前提
-
-このベースを使うには、以下が必要:
-
-- **Claude Code** — Claude.ai 経由のサブスクリプションが必要（クラウド実行環境 / ローカル CLI のどちらでも動作する）
-- **Python 3.10 以上** — `tools/*.py` の実行に必要。外部依存は `PyYAML` のみ（`requirements.txt`）
-- **GitHub リポジトリ** — PR 自動化・Issue 管理の土台として使う。クラウド実行では `GH_TOKEN` は未設定のままでよい（プロキシが認証を注入する）
-- 任意 — Slack（完了通知用）・`context7` の API キー（MCP 経由のドキュメント取得用）
-
-**本プロジェクトのドキュメント・ルール・スキル定義はすべて日本語で書かれている**（英語版は提供していない）。
-既定の応答スタイルも日本語のため、別の言語で運用する場合は `CLAUDE.md`「応答スタイル」節と
-`.claude/output-styles/` を書き換える。
-
-動作確認は Linux / macOS。Windows はネイティブ環境では未検証（ハーネスが bash スクリプトのため WSL を推奨）。
-クラウド実行環境では `gh` CLI がプリインストールされておらず、GitHub 操作は `mcp__github__*` が一次経路になる。
-
-## 使い方（クイックスタート）
-
-```bash
-# 1. このリポジトリを新規プロジェクトの土台として取り込む（テンプレート利用 or clone）
-git clone https://github.com/kai-kou/claude-code-repository-base your-project && cd your-project
-
-# 2. プレースホルダ置換 + symlink 同期（不要モジュールがあれば modules.yaml を編集後 --prune）
-bash scripts/bootstrap.sh --repo your-org/your-repo --name "Your Project" --tz Asia/Tokyo --prune
-
-# 3. ミッションを記入
-$EDITOR docs/project-mission.md
-
-# 4. CLAUDE.md の「応答スタイル」「PR 自律化方針」を確認・調整
-
-# 5. クラウド実行する場合: env は Claude.ai の環境設定に登録する
-#    （GH_TOKEN は未設定でよい。未設定ならプロキシが GitHub 認証を注入する）
-#    ※ gh variable set 経由の登録はローカル実行専用（クラウドからは 403 で読み書き不能・L-114）
-```
-
-### プレースホルダ
-
-bootstrap が以下を置換する（手動置換も可）:
-
-| プレースホルダ | 置換後 |
-|--------------|--------|
-| `__OWNER__/__REPO__` / `{{REPO_SLUG}}` | `owner/repo`（gh / tools が参照） |
-| `{{PROJECT_NAME}}` | プロジェクト名 |
-| `{{PROJECT_DESCRIPTION}}` | プロジェクト説明 |
-
-> ベース配布時点では tools/hooks に `__OWNER__/__REPO__` が残っているため、bootstrap 実行前は
-> リポジトリ依存ツールが動かない（テンプレートの正常な状態）。`PROJECT_REPO` 環境変数でも上書き可能。
-
-## 既存リポジトリへ適用する（ワンコマンド）
-
-「新規プロジェクトの土台」としてではなく、**既にある別リポジトリへルール・スキル・ハーネスだけを後付け** したい場合は、対象リポジトリのルートで以下を実行する（毎回手動で「gh で base を参照して全部適用して」と指示する必要がなくなる）:
-
-```bash
-# git だけで動く（gh は任意）。対象リポジトリの slug は git remote から自動判定
-curl -fsSL https://raw.githubusercontent.com/kai-kou/claude-code-repository-base/main/scripts/apply-to-repo.sh | bash
-```
-
-- ルール（`docs/rules/` + `.claude/rules/` symlink）・スキル（`.claude/skills/`）・ハーネス（`.claude/hooks/` + `settings.json`）・ツール一式を展開し、プレースホルダを対象 slug で置換する
-- `CLAUDE.md` / `docs/project-mission.md` は **プロジェクト固有のため既定では上書きせず**、ベース版を `*.base` として横に置く（`--overwrite-project` で上書き可能）
-- **冪等** なので、ベース更新後に再実行すれば最新へ同期できる
-- オプション（`--prune` / `--tz` / `--ref` / `--dry-run` 等）と詳細は [`docs/apply-to-existing-repo.md`](docs/apply-to-existing-repo.md) を参照
-
-## モジュールの有効/無効
-
-`modules.yaml` で管理する。`core-principles` と `session-safety` は `required:true`（外せない土台）。
-不要なモジュール（例: `slack-notify`・`ci-helpers`）を `enabled: false` にして
-`bash scripts/bootstrap.sh --repo ... --prune` を実行すると、該当する rules / hooks / skills / tools を除去する。
-
-手動で外す場合:
-- ルール: `.claude/rules/<name>.md`（symlink）を削除（実体は `docs/rules/` に残る）
-- スキル: `.claude/skills/<name>/` を削除
-- フック: `.claude/settings.json` の `hooks` から該当エントリを削除
-
-## ルールの 3 層構造
-
-- **Hot**（`.claude/rules/` 常駐 symlink・全セッション自動読み込み）: 全セッション横断で必須なクリティカル規範のみ
-- **Warm**（`docs/rules/lessons/<category>.md`・タスク依存 Read）: カテゴリ別の教訓
-- **Cold**（git 履歴）: 昇格済みエントリは物理削除して履歴に委ねる
-
-`tools/lessons_guard.py` が Hot 層の行数・エントリ数上限を機械強制する。
-
-## Plugin / MCP として使う
-
-本ベースは clone/テンプレート利用に加え、**Claude Code Plugin** としても読み込める。
-
-- `.claude-plugin/plugin.json`: Plugin マニフェスト（メタデータ + `skills` / `agents` のパス宣言）。スキルは `.claude/skills/`、エージェントは `.claude/agents/owner.md` を指す
-- `.mcp.json`: プロジェクトスコープの MCP サーバ定義（`context7` / `github`）。環境変数は `${VAR:-default}` 展開で、未設定でも config 解析が壊れない
-
-### MCP サーバ（`.mcp.json`）
-
-clone 利用時はリポジトリルートの `.mcp.json` が自動でプロジェクトスコープ MCP として認識される（初回は承認プロンプトが出る）。トークンは環境変数で渡す:
-
-```bash
-export GH_TOKEN=ghp_xxx              # github MCP（既定 https://api.githubcopilot.com/mcp/）
-export CONTEXT7_API_KEY=ctx_xxx      # context7（任意・未設定でも匿名で動作）
-```
-
-### Plugin インストール
-
-ローカルマーケットプレイス経由でインストールする場合:
-
-```bash
-# このリポジトリをマーケットプレイスとして追加
-claude plugin marketplace add kai-kou/claude-code-repository-base
-# プラグインをインストール
-claude plugin install claude-code-base
-# マニフェストの妥当性チェック
-claude plugin validate .
-```
-
-> **注意（フックの扱い）**: 本ベースのフック（main 直 push ブロック等）は `.claude/settings.json` に登録されており、**clone/テンプレート利用では自動で有効** になる。Plugin インストール経由でのフック配布（`hooks/hooks.json` 形式）は未対応のため、フックのガードレールが必要な場合は clone 利用を推奨する。
-
-## 出自
-
-本ベースは、YouTube 動画自動制作パイプラインとして実運用していた個人プロジェクト（private リポジトリ）から、
-ドメインに依存しない汎用部分だけを抽出・脱ドメイン化したスナップショット。
-一部のルール本文には出自プロジェクトの事例（過去の事故・教訓）が参照として残る場合がある（フレームワークの理解に有用なため保持）。
-
-## 運用記録について
-
-`docs/base-update-notes.md` や `content/discussions/` の一部エントリには、著者自身が運用する
-下流プロジェクトへの適用記録が含まれる。これらは第三者向けの手順書ではなく、著者がベースの変更を
-自分の下流プロジェクトへ同期する際の作業ログである。実運用で使われている証跡として意図的に残しているが、
-本ベースを利用するうえで読む必要はない。
-
-`content/discussions/` は議論型レビュー（敵対的相互レビュー）の記録で、設計判断の経緯を残す ADR に相当する。
-`tools/discussion_whiteboard.py` の現役の参照先でもあるため、不要な場合はディレクトリごと削除してよい。
 
 ## License
 

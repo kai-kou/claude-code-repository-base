@@ -35,11 +35,11 @@ from repo_slug import resolve_repo_slug  # noqa: E402
 
 REPO = resolve_repo_slug("__OWNER__/__REPO__")
 
-# 汎用ベースのコア管理変数（slack-notify / ai-reviewer モジュール）。
-# プロジェクト固有の変数（YouTube / VOICEVOX / X / Bluesky / R2 等）は
-# 環境変数 MANAGED_GITHUB_VARS（カンマ区切り）で注入する。これにより
-# 汎用ベースのコードにドメイン固有変数をハードコードしない（脱ドメイン）。
-#   例: export MANAGED_GITHUB_VARS="YOUTUBE_CLIENT_ID,VOICEVOX_ENDPOINT,X_API_KEY"
+# 汎用ベースのコア管理変数（slack-notify モジュール）。
+# プロジェクト固有の変数（外部 API のトークン等）は環境変数 MANAGED_GITHUB_VARS
+# （カンマ区切り）で注入する。これにより汎用ベースのコードにドメイン固有変数を
+# ハードコードしない（脱ドメイン）。
+#   例: export MANAGED_GITHUB_VARS="YOUR_API_KEY,YOUR_SERVICE_TOKEN"
 CORE_MANAGED_VARS = [
     "SLACK_BOT_TOKEN",
     "SLACK_CHANNEL_ID",
@@ -47,8 +47,6 @@ CORE_MANAGED_VARS = [
     "SLACK_PUBLISH_CHANNEL_ID",
     "SLACK_CODE_CHANNEL_ID",
     "SLACK_MENTION_USER_ID",
-    "GEMINI_MCP_AUTH_TOKEN",
-    "GEMINI_API_KEY",
 ]
 
 # GH_TOKEN は GitHub Variables からの読み取りに必要なため、

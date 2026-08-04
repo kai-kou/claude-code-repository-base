@@ -153,7 +153,7 @@
   - `tools/check_pending_pr_reviews.py` の自動マージ判定に **著者検証**（`authorAssociation` が
     OWNER / MEMBER / COLLABORATOR）を追加した。従来はブランチ名の前方一致だけで判定しており、
     public リポジトリでは第三者の fork PR が無人マージ経路に到達しうる状態だった。
-- `base-harvest` スキルは配布対象から外れた（著者専用の還流スキルのため）。
+- `base-harvest` スキルは配布対象から外れた（配布物の受け手には使い道がない運用スキルのため）。
 
 **下流で必要な手動手順**:
 
