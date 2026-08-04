@@ -72,7 +72,11 @@ fi
 
 # 判定対象のファイル名トークンを列挙する（コマンド直後の第1引数 + リダイレクト先 + 下記の多引数コマンド）
 _sfa_candidate_tokens() {
-  _sfa_cmds='cat|less|head|tail|more|source|cp|mv|install|base64|xxd|od|strings|tar|rsync|curl|scp|sftp'
+  # curl はここに含めない: _sfa_multi_cmds（下記）の「呼び出しブロック全体から非フラグ位置引数を
+  # 全て候補にする」抽出が、ここでの「フラグ後の第1トークンのみ」抽出を常に包含する強い上位互換
+  # のため、二重登録は正規化前（@ 剥がし未適用）の重複トークンを生むだけで検知漏れの防止には
+  # ならない（#417 Layer 1 レビューで指摘）。
+  _sfa_cmds='cat|less|head|tail|more|source|cp|mv|install|base64|xxd|od|strings|tar|rsync|scp|sftp'
   printf '%s\n' "$COMMAND" \
     | grep -oE "(^|[[:space:];|&(\`{])(${_sfa_cmds})([[:space:]]+-[^[:space:];|&]+)*[[:space:]]+['\"]?[^[:space:];|&'\")]+" \
     | sed -E "s/.*[[:space:]]['\"]?//" || true
@@ -87,16 +91,25 @@ _sfa_candidate_tokens() {
   # 読み取り元・アーカイブ対象が「値を取るフラグの値」や「第2引数以降」に来やすいコマンドは
   # 第1非フラグ引数だけでは取りこぼす（例: `install -m 600 ~/.ssh/id_rsa /tmp/x` の値は `600`、
   # `tar czf out.tgz ~/.ssh` / `cp -r src ~/.ssh` の機密パスは第2引数・#395）。
-  # 対象をこの5コマンドに絞り、呼び出しブロック全体から非フラグ位置引数を全て候補にする。
+  # 対象をこの6コマンドに絞り、呼び出しブロック全体から非フラグ位置引数を全て候補にする。
   # 値を取るフラグの値そのもの（上記の `600`）や書き込み先も一緒に候補へ混じるが、
   # 実在の機密名パターンに一致しない限り誤検知は起きないため許容する。
-  _sfa_multi_cmds='cp|install|tar|rsync|scp'
+  # curl も同じ理由で対象に含む（#417）: `-T ~/.ssh/id_rsa` のような値を取るフラグの値、
+  # `--data-binary @~/.aws/credentials` のようなローカルファイル読み込み（`@file` 構文）が
+  # 第1非フラグ引数に来ない。先頭の `@` はクォート同様に剥がし、ディレクトリベースの判定
+  # （`~/.aws/**` 等）が `@` 付きトークンでも一致するようにする（curl 固有の記法だが、
+  # 剥がし自体は6コマンド共通のパイプラインに一律適用する。他5コマンドで `@` が先頭に来る
+  # 引数は実運用でまず出現せず、万一出現しても剥がした結果が既存の機密名パターンに一致した
+  # ときだけ追加でブロック方向に働く＝安全側の広がりのため、curl 専用に分岐させるコストを
+  # かけない）。クォート付き `"@path"` は先にクォートを剥がしてから `@` を剥がす
+  # （1回の sed 置換に `['"@]` をまとめて詰めると `"@path"` の `@` が剥がれ残るため2段階にする）。
+  _sfa_multi_cmds='cp|install|tar|rsync|scp|curl'
   printf '%s\n' "$COMMAND" \
     | grep -oE "(^|[[:space:];|&(\`{])(${_sfa_multi_cmds})[[:space:]]+[^;|&\`)]*" \
     | sed -E "s/^[[:space:];|&(\`{]?(${_sfa_multi_cmds})[[:space:]]+//" \
     | tr -s '[:space:]' '\n' \
     | grep -vE '^-|^$' \
-    | sed -E "s/^['\"]//;s/['\")]\$//" || true
+    | sed -E "s/^['\"]//;s/^@//;s/['\")]\$//" || true
 }
 
 # .env（本物のみ。.env.example 等のテンプレートは通す）
