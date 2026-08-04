@@ -278,11 +278,11 @@ def self_test() -> int:
     assert _sha("abc") == _sha("abc")
     assert _sha("abc") != _sha("abd")
     # parity ロジック（擬似データ）
-    broker = {"OPENAI_API_KEY": "v1", "QIITA_TOKEN": "v2"}
-    variables = {"OPENAI_API_KEY": "v1", "QIITA_TOKEN": "vX", "GH_TOKEN": "boot"}
+    broker = {"OPENAI_API_KEY": "v1", "EXAMPLE_SERVICE_TOKEN": "v2"}
+    variables = {"OPENAI_API_KEY": "v1", "EXAMPLE_SERVICE_TOKEN": "vX", "GH_TOKEN": "boot"}
     migrated = {n: v for n, v in variables.items() if is_migrated_key(n)}
     mism = [n for n, v in migrated.items() if broker.get(n) and _sha(broker[n]) != _sha(v)]
-    assert mism == ["QIITA_TOKEN"], mism
+    assert mism == ["EXAMPLE_SERVICE_TOKEN"], mism
     print("self-test: PASS")
     return 0
 

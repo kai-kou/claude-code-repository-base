@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """detect_pr_diff_type.py — PR の差分が「コード変更」を含むかを判定する（#2880）。
 
-audio/image/video パイプラインの Step 8（PR 作成前）で実行し、
-差分が VOICEVOX 自動生成データのみ（content/scripts/V*_timed.json 等）の場合は
-重い Layer 2（敵対的多観点議論）をスキップして PR 所要時間を削減する。
+制作系パイプラインの PR 作成前ステップで実行し、差分が自動生成データのみ
+（例: 台本・素材・分析データ等）の場合は重い Layer 2（敵対的多観点議論）を
+スキップして PR 所要時間を削減する。
 外部 AI レビュアー（Copilot / Gemini）への依頼は廃止済みで、レビューは常に Claude 自身の
 Layer 1 セルフレビュー（自前 code-review スキル・全 PR 必須）で完結する
 （組み込み /code-review は同名 project スキルで置換済み・#275 → #280。SSOT: docs/rules/ai-reviewer-strategy.md）。
@@ -12,10 +12,9 @@ Layer 1 セルフレビュー（自前 code-review スキル・全 PR 必須）�
 - コード拡張子（.py/.ts/.tsx/.js/.jsx/.sh/.yaml/.yml/.toml/.md）を含むか
 - 拡張子マッチでは拾えない critical な設定・依存関係ファイル名（package.json / Dockerfile /
   requirements.txt / pyproject.toml / .gitignore / Makefile 等）も code 扱い（CRITICAL_FILENAMES）
-- ただし以下のパス配下は auto-gen データ扱いで code 変更とみなさない（DATA_PATH_PREFIXES）:
-  - `content/` 配下（自動生成された台本・素材・分析データ）
-  - `docs/research/` 配下（Deep Research 出力）
-  - `remotion/src/data/` 配下（image-pipeline が生成する imageMap.ts / scene data）
+- ただし `config/data_only_path_prefixes.txt` に列挙したパス配下は auto-gen データ扱いで
+  コード変更とみなさない（既定値は `content/`。プロジェクト固有の生成データ置き場を追加したい
+  場合はコード変更不要でこのファイルに追記する・#413）
 
 使い方:
     python3 tools/detect_pr_diff_type.py                  # JSON 出力（既定）
@@ -28,7 +27,7 @@ Layer 1 セルフレビュー（自前 code-review スキル・全 PR 必須）�
       "data_only": true,
       "review_strategy": "claude_only",
       "code_files": [],
-      "data_files": ["content/scripts/V183_timed.json"],
+      "data_files": ["content/scripts/episode_001.json"],
       "high_risk": false,
       "risk_reasons": [],
       "risk_files": []
@@ -50,16 +49,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 
 CODE_EXTENSIONS = re.compile(r"\.(py|ts|tsx|js|jsx|sh|ya?ml|toml|md)$")
-# 自動生成データの配置先（コード拡張子でもコード変更とみなさない）
-# - content/: 自動生成された台本・素材・分析データ
-# - docs/research/: リサーチ成果（Deep Research 出力）
-# - remotion/src/data/: image-pipeline が生成する imageMap.ts / scene data（auto-gen TS）
-DATA_PATH_PREFIXES = ("content/", "docs/research/", "remotion/src/data/")
+# 自動生成データの配置先の組み込み既定値（config/data_only_path_prefixes.txt が無い/空のときの
+# フォールバック）。プロジェクト固有の追加は config ファイル側に書く（コード変更不要・#413）。
+DEFAULT_DATA_PATH_PREFIXES = ("content/",)
+DATA_PATH_PREFIXES_CONFIG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "config", "data_only_path_prefixes.txt"
+)
+
+
+def load_data_path_prefixes(path: str = DATA_PATH_PREFIXES_CONFIG) -> tuple[str, ...]:
+    """auto-gen データ扱いするパス接頭辞を config ファイルから読む（無ければ組み込み既定値）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [line.strip() for line in f]
+    except OSError:
+        return DEFAULT_DATA_PATH_PREFIXES
+    prefixes = tuple(line for line in lines if line and not line.startswith("#"))
+    return prefixes or DEFAULT_DATA_PATH_PREFIXES
+
+
+DATA_PATH_PREFIXES = load_data_path_prefixes()
 # 拡張子マッチでは拾えない critical な設定・依存関係ファイル名（コード変更と同等に扱う）
 # package.json は .json 拡張子だがコード変更と同等の影響を持つため除外できない
 CRITICAL_FILENAMES = frozenset({
