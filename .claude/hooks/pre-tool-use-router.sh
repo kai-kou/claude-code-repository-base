@@ -68,8 +68,9 @@ fi
 #     行頭または `;` `&` `|` `(` 等の区切り直後の `.` に限定して抽出する（`source` と `.` は
 #     POSIX 上の同義語であり、片方だけ守るのは片手落ちになる）
 #   - コマンド名の直後の引数だけを見るため、"git commit -m '... .env ...'" は誤検知しない
+#     （ただし読み取り元がフラグ値や第2引数以降に来やすい cp/install/tar/rsync/scp は例外。下記参照）
 
-# 判定対象のファイル名トークンを列挙する（コマンド直後の第1引数 + リダイレクト先）
+# 判定対象のファイル名トークンを列挙する（コマンド直後の第1引数 + リダイレクト先 + 下記の多引数コマンド）
 _sfa_candidate_tokens() {
   _sfa_cmds='cat|less|head|tail|more|source|cp|mv|install|base64|xxd|od|strings|tar|rsync|curl|scp|sftp'
   printf '%s\n' "$COMMAND" \
@@ -83,6 +84,19 @@ _sfa_candidate_tokens() {
   printf '%s\n' "$COMMAND" \
     | grep -oE "(^|[;|&(\`{][[:space:]]*)\.[[:space:]]+['\"]?[^[:space:];|&'\")-][^[:space:];|&'\")]*" \
     | sed -E "s/.*[[:space:]]['\"]?//" || true
+  # 読み取り元・アーカイブ対象が「値を取るフラグの値」や「第2引数以降」に来やすいコマンドは
+  # 第1非フラグ引数だけでは取りこぼす（例: `install -m 600 ~/.ssh/id_rsa /tmp/x` の値は `600`、
+  # `tar czf out.tgz ~/.ssh` / `cp -r src ~/.ssh` の機密パスは第2引数・#395）。
+  # 対象をこの5コマンドに絞り、呼び出しブロック全体から非フラグ位置引数を全て候補にする。
+  # 値を取るフラグの値そのもの（上記の `600`）や書き込み先も一緒に候補へ混じるが、
+  # 実在の機密名パターンに一致しない限り誤検知は起きないため許容する。
+  _sfa_multi_cmds='cp|install|tar|rsync|scp'
+  printf '%s\n' "$COMMAND" \
+    | grep -oE "(^|[[:space:];|&(\`{])(${_sfa_multi_cmds})[[:space:]]+[^;|&\`)]*" \
+    | sed -E "s/^[[:space:];|&(\`{]?(${_sfa_multi_cmds})[[:space:]]+//" \
+    | tr -s '[:space:]' '\n' \
+    | grep -vE '^-|^$' \
+    | sed -E "s/^['\"]//;s/['\")]\$//" || true
 }
 
 # .env（本物のみ。.env.example 等のテンプレートは通す）
