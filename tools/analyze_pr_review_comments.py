@@ -8,6 +8,10 @@
 チェックシート（docs/rules/self-review-checklist.md）の根拠データを更新する際は
 本ツールの出力を使う。前回統計（docs/analysis/pr_review_stats_*.json）との差分も出力する。
 
+分類ルール（CATEGORY_RULES）は `config/pr_review_comment_categories.json` から読み込む
+（無い/壊れている場合は組み込み既定値にフォールバック）。プロジェクト固有のカテゴリを
+追加したい場合はコード変更不要で同ファイルに追記できる（#420）。
+
 Usage:
     python3 tools/analyze_pr_review_comments.py                    # 取得→集計→サマリー表示
     python3 tools/analyze_pr_review_comments.py --report           # docs/analysis/ にレポート+統計を保存
@@ -38,19 +42,14 @@ ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "docs" / "analysis"
 # "copilot" は Copilot / copilot[bot] / copilot-pull-request-reviewer[bot] を全てカバーする
 AI_REVIEWER_PATTERNS = ("gemini-code-assist", "copilot")
 
-# カテゴリ分類ルール（先勝ち。具体的なカテゴリを先に置く）
-# (key, 表示名, 正規表現)。チェックシートの章立てと対応させる。
-CATEGORY_RULES = [
-    ("script-field", "emotion/action/speaker_id 等フィールド値不正",
-     r"emotion|voicevox_speaker|speaker_id|\baction\b"),
-    ("timed-sync", "timed/script 同期",
-     r"timed\.json|sync_timed"),
+# カテゴリ分類ルールの組み込み既定値（config/pr_review_comment_categories.json が無い/壊れている
+# ときのフォールバック。内容は同ファイルの既定値と同一に保つ・#420）。
+# (key, 表示名, 正規表現)。先勝ち（先頭ほど優先）。
+DEFAULT_CATEGORY_RULES = [
     ("fact-check", "fact_check（ランク・出典・断定）",
      r"fact_check|ランク\s*[ABC]|出典|一次ソース|source_url|断定"),
     ("path-convention", "パス・ファイル名規約違反",
-     r"audio_file|二重パス|assets/|パス(の|が)?(規約|誤り|不正|間違)|ファイル名.{0,8}(規約|誤)"),
-    ("subtitle-length", "字幕・セリフ文字数・尺",
-     r"文字数|字幕|100\s*文字|90\s*文字|セリフが?長"),
+     r"二重パス|assets/|パス(の|が)?(規約|誤り|不正|間違)|ファイル名.{0,8}(規約|誤)"),
     ("pagination", "ページネーション・limit 不足",
      r"--limit|per_page|ページネーション|paginate"),
     ("timezone", "timezone/datetime",
@@ -71,8 +70,8 @@ CATEGORY_RULES = [
      r"\bDRY\b|重複(した)?(コード|実装|ロジック|定義)|共通化|再発明"),
     ("hardcode", "ハードコード・マジックナンバー",
      r"ハードコード|マジックナンバー|定数化"),
-    ("dialect", "キャラ口調・方言",
-     r"京都弁|大阪弁|口調|です・ます|敬体|キャラ(設定|崩壊)"),
+    ("dialect", "口調・キャラクタートーン一貫性",
+     r"口調|です・ます|敬体|キャラ(設定|崩壊)"),
     ("url-link", "URL・リンク切れ/誤リンク",
      r"リンク切れ|リンクが(誤|切れ|無効)|URL が?(誤|無効|存在しない)|404"),
     ("doc-impl-drift", "ドキュメント⇔実装の乖離",
@@ -84,6 +83,27 @@ CATEGORY_RULES = [
     ("logic", "ロジックバグ・条件式誤り",
      r"条件(式|分岐)|ロジック|off-by-one|境界(値|条件)|意図(した|と異なる)挙動|反転"),
 ]
+CATEGORY_RULES_CONFIG = Path(__file__).resolve().parent.parent / "config" / "pr_review_comment_categories.json"
+
+
+def load_category_rules(path: Path = CATEGORY_RULES_CONFIG) -> "list[tuple[str, str, str]]":
+    """分類ルールを config ファイルから読む（無い/壊れていれば組み込み既定値にフォールバック）。
+
+    プロジェクト固有のカテゴリ（例: 音声合成・字幕等ドメイン固有の判定）を追加したい場合は、
+    このファイルに `categories` エントリを追記するだけでよい（コード変更不要・#420）。
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        categories = data["categories"]
+        rules = [(c["key"], c["label"], c["pattern"]) for c in categories]
+        for _, _, pattern in rules:
+            re.compile(pattern)  # classify() の re.search が後で失敗しないよう load 時に検証する
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, re.error):
+        return DEFAULT_CATEGORY_RULES
+    return rules or DEFAULT_CATEGORY_RULES
+
+
+CATEGORY_RULES = load_category_rules()
 
 # Gemini の重大度バッジ実名称（critical のみ -priority なし。security-* も同重大度に合算）
 SEVERITY_BADGES = [
