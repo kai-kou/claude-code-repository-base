@@ -1,4 +1,4 @@
 {
   "_note": "リファインメント（低優先・滞留 Issue の 4 出口精査）の最終実行時刻（JST・ISO 8601）。docs/routines.md の R-1 手順 9-3 が週次ゲートとして読み書きし、本体は .claude/skills/self-improvement-loop/SKILL.md の Step G-1.5 → G-6 が実行する。null は「一度も実行されていない」を意味し、次回の R-1 でリファインメントが走る。workflow_health_state.json とは分離する（同一ファイルを 2 ゲートが更新すると、無関係なキー変更同士で push が蹴られる偽陽性の競合が起きるため）。",
-  "last_refinement_at": null
+  "last_refinement_at": "2026-08-06T13:22:30+09:00"
 }
