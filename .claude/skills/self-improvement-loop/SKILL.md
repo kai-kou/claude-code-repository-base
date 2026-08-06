@@ -1,6 +1,6 @@
 ---
 name: self-improvement-loop
-description: プロジェクト全体を定期的に横断レビューし、根本原因特定→改善Issue起票→棚卸し（集計・重複統合・Epic化・priority/sp 補完）→最優先即実装→マージまで自律実行するセルフ改善オーケストレーター。発見（定期の N 観点横断レビュー）・整理（溜まった type:improvement の棚卸し）・消化（改善Issueの高速処理）の3モードで動く。「セルフ改善して」「横断レビューして」「プロジェクト改善して」「改善Issueを棚卸しして」「改善バックログを整理して」「Epic化して」「改善Issue消化して」「/self-improvement-loop」と依頼された時、またはプロジェクト定義の発見スロット / 日次消化スロットで自動実行する。type:retro-try（振り返り由来の Try）は retro-try-handler、Issue/PR の状態・衛生は workflow-health-check / project-sync が担当する。
+description: プロジェクト全体を定期的に横断レビューし、根本原因特定→改善Issue起票→棚卸し（集計・重複統合・Epic化・priority/sp 補完・低優先/滞留 Issue のリファインメント）→最優先即実装→マージまで自律実行するセルフ改善オーケストレーター。発見（定期の N 観点横断レビュー）・整理（棚卸し + リファインメント）・消化（改善Issueの高速処理）の3モードで動く。「セルフ改善して」「横断レビューして」「プロジェクト改善して」「改善Issueを棚卸しして」「改善バックログを整理して」「Epic化して」「リファインメントして」「後回しになっている Issue を精査して」「改善Issue消化して」「/self-improvement-loop」と依頼された時、またはプロジェクト定義の発見スロット / 日次消化スロット / リファインメントの週次ゲート（プロジェクト定義の定期ルーティン）で自動実行する。type:retro-try（振り返り由来の Try）は retro-try-handler、Issue/PR の状態・衛生は workflow-health-check / project-sync が担当する。
 effort: medium
 ---
 
@@ -25,7 +25,7 @@ effort: medium
 | モード | 役割 | 頻度 | コスト |
 |--------|------|------|--------|
 | **発見モード** | N 観点の並列横断レビューで新規課題を発掘し改善Issueを起票 | 定期（プロジェクト定義の発見スロット） | 高（並列サブエージェント） |
-| **整理モード** | 溜まった `type:improvement` の棚卸し（集計・重複統合・Epic 化・priority/sp 補完） | 滞留時（30 件超）/ 月次 | 中 |
+| **整理モード** | 溜まった `type:improvement` の棚卸し（集計・重複統合・Epic 化・priority/sp 補完）+ **リファインメント**（後回しにされた低優先・滞留 Issue を 4 出口へ必ず遷移させる・Step G-1.5 / G-6） | 滞留時（30 件超）/ 月次 / **リファインメントは週次ゲート**（プロジェクト定義の定期ルーティンから起動） | 中 |
 | **消化モード** | 起票済み改善Issueを優先度順に高速消化（実装 → PR → マージ） | 日次（プロジェクト定義の消化スロット） | 低〜中 |
 
 **長期放置防止**: 発見（在庫生成）と消化（処理）を分離し、消化を日次・複数件で回すことで改善スループットを最大化する。在庫が積み上がって「多すぎて選べない」状態になったら整理モードを挟む。改善Issueは作成後 **7日で必ず再評価**（project-sync が検出）。
@@ -111,6 +111,47 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 
 レポートの内容: **集計**（priority / sp / 監査フェーズの分布）・**カテゴリ別件数**（監査タグ優先、なければキーワードクラスタ）・**Epic 統合候補**（同一カテゴリに `--epic-threshold`〔既定 6〕件以上集中）・**重複/酷似**（監査ドメインコード重複 / タイトルトークンの Jaccard 類似度 ≥ 0.6）・**ラベル欠損**（priority / sp 未設定。Epic は除外）。
 
+### Step G-1.5: リファインメント対象の抽出（type 非依存・週次ゲートの入口）
+
+> **目的**: R-1 の選択順（priority 降順 → sp 昇順）で **構造的に永久に選ばれない** Issue と、
+> ブロック要因の再評価だけでは「そもそも要るのか」を問われない Issue を拾い上げる。
+> **入口**: プロジェクト定義の定期ルーティンに配線した週次ゲート（state は `config/backlog_refinement_state.json` の `last_refinement_at`。ファイルが無ければ「未実行」とみなして実行し、初回に作成する）。
+> 手動起動（「リファインメントして」）でも同じ手順を実行する。
+
+Step G-1 のレポート（`triage_improvements.py`）は `type:improvement` に限定されるため **本 Step では使わない**。
+`mcp__github__list_issues`（`state=OPEN` / `fields` に `number,title,labels,created_at,updated_at,comments`）で
+全オープン Issue を取得し、次の述語で対象集合 `T` を計算する（新規ツールは作らない・ラベルと日付だけで再計算可能）。
+
+```
+T = R3-1 ∪ R3-2
+
+R3-1（構造的スタベーション予備軍）:
+  state = OPEN
+  AND status:in-progress / status:waiting-user / status:blocked のいずれも付いていない
+  AND (priority:low OR priority ラベル欠落)
+  AND (sp:5 OR sp:8)
+  AND created_at から 14 日以上経過
+
+R3-2（ブロック理由を超えた精査対象）:
+  status:blocked
+  AND 定期ルーティンの blocked 再評価が付ける「未解消」コメントが 2 回以上（≒ 14 日以上）
+  ただし打ち切り回（≒21 日・A/B/C/D 分類へ強制分岐）に達したものは再評価側の担当
+
+共通の除外:
+  status:waiting-user（A 区分＝ユーザー判断待ち。waiting-user-handler の担当）
+  type:retro-try（振り返りレーンの専管・#160 の奪い合い防止）
+  同じ回のルーティンが blocked 再評価コメントを付けたばかりの Issue
+    （二重処理を避け、再評価の打ち切りカウントを優先する。次回の精査で拾う）
+```
+
+> **用語の注意**: 本 Step の「リファインメント」は **起票済み Issue の要否・束ね方を問い直す工程** で、
+> `session-sprint-rules.md` 系の「refinement 昇格」（起票時に `sp:` を付けてバックログに載せる工程）とは
+> 別物。前者はライフサイクル後半、後者は入口の作業を指す。
+
+**type ラベルで絞らない**（`type:feature` / `type:docs` / type 欠落も対象。#335 のカバレッジ不変条件を継承）。
+
+`T` が空なら **no-op**（「対象ゼロ（オープン N 件 / 除外内訳）」を 1 行報告して終了。Step G-6 は実行しない）。
+
 ### Step G-2: @owner（PO）連携で優先度・SP を補完
 
 ラベル欠損 Issue（`missing_priority` / `missing_sp`）について `@owner` を **PO として** 呼び出す。@owner は `mcp__github__issue_write` で `sp:` / `priority:` を直接付与できる（`session-sprint-rules.md` §4・ホワイトリストは `sp:` / `priority:` のみ）。基準は SP = `session-sprint-rules.md` §3.1、priority = CP-5 ミッション貢献度（`docs/project-mission.md` の KPI 直結度）。
@@ -141,6 +182,93 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 2. **最優先 1 件**（priority:high かつ即実装可能）を消化モードへ渡す（そのまま実装するか、`status:waiting-claude` のまま次スロットに委譲）
 3. レポートをリポジトリに残す場合は `content/analytics/grooming/YYYY-MM-DD.md`（プロジェクトの保管規約に合わせる）に置き、ファイル変更があれば PR 化
 
+### Step G-6: リファインメント 4 出口判定（Step G-1.5 で `T` が非空のときのみ）
+
+> **目的**: 対象 Issue を「取り組む / やめる / 束ねる / 保留」の **いずれかに必ず遷移させる**。
+> 既存 Step G-3（明白な重複・陳腐化のクローズ）・G-4（Epic 統合）の判断基準は **変更しない**。
+> 本 Step は確信度の異なる新しい判断軸（CP-5 貢献度）を並走させ、実行機構（Epic 化・クローズ）だけを再利用する。
+
+#### 判定順（前段が該当したら後段は評価しない。すべて NO なら「保留」）
+
+```
+Q1 束ねる : 同カテゴリの他候補、または既存 [Epic] が存在するか
+            （カテゴリは対象 Issue のタイトル・本文のキーワードクラスタで簡易判定する。
+             triage_improvements.py のカテゴリ分類器は type:improvement 前提のため使わない）
+Q2 やめる : Step G-3 の「陳腐化」基準に該当する（判定手順もそのまま適用・grep / コード確認必須）
+            OR CP-5 貢献度が「低」
+Q3 取り組む: CP-5 貢献度が「中」以上 AND 着手コストが明確（sp:1〜3、または sp:5 でも設計が明確）
+Q4 保留   : 上記いずれにも至らない（貢献度は中だが着手コストが不明瞭・前提調査が必要 等）
+```
+
+#### CP-5 貢献度の判定（縮退プロキシ付き）
+
+```
+IF docs/project-mission.md の KPI 表が実値で埋まっている:
+    どの KPI に直結するか明示できる → 高 ／ 間接的（品質・自動化に資する）→ 中 ／ 接続できない → 低
+ELSE（{{...}} 雛形のまま＝bootstrap 直後のプロジェクト）:
+    core-principles.md CP-5 の汎用優先順位を代理指標にする
+    （① KPI 直結 ②品質向上 ③自動化・効率化 ④ドキュメント・運用改善）
+    ①② に該当する根拠を示せる → 中〜高 ／ ③ のみ → 中 ／ ④ のみで実利を示せない → 低
+```
+
+#### 精査コストのゲート（件数ではなく「個々の Issue の曖昧さ」で決める）
+
+| 判定の性質 | 実行経路 |
+|-----------|---------|
+| `T` が空 | no-op（Step G-1.5 で終了） |
+| Q1（束ねる）・Q2 の陳腐化枝など **明白なケース** | 単独判断（既存 G-3 / G-4 と同じ確信度） |
+| Q2 の CP-5「低」枝・Q3 の境界など **グレーゾーン** | `Skill(discussion-review)` で専門チーム精査（対象 1 件でも起動してよい） |
+
+対象件数を発火下限にしない（件数は精査コストの代理指標にならない。1 件でもグレーなら精査価値があり、
+複数件でも全て明白なら単独判断で足りる）。
+
+#### 各出口の実行アクションと権限
+
+| 出口 | ラベル操作 | 実行アクション | 権限 |
+|------|-----------|---------------|------|
+| **取り組む** | `status:blocked` を外し `status:waiting-claude` を付与（`status:in-progress` にはしない＝実装は次回の消化スロットへ委譲） | **R3-1 由来の対象は `priority:` の再査定を @owner（PO）に必ず依頼する**（`priority:low` のままでは消化スロットの選択順が変わらず、ラベル付け替えだけでは着手されないため）。sp:8 は分割余地も併せて諮る | メイン（`status:`）/ @owner（`priority:` `sp:` のみ・`session-sprint-rules.md` §4） |
+| **やめる** | なし | `mcp__github__issue_write(state="closed", state_reason="not_planned")`。根拠は「陳腐化」または「CP-5 貢献度が低い」 | メイン（Issue クローズは A-1〜A-6 に該当しない＝ユーザー確認不要） |
+| **束ねる** | 変更しない（子はそのまま） | Step G-4 の Epic 機構を再利用（既存 Epic があれば `mcp__github__sub_issue_write` で紐付け、なければ新規作成）。**子はクローズしない** | メイン |
+| **保留** | 変更しない | コメントのみ（次回精査日を明記） | メイン |
+
+#### 記録フォーマット（機械検証の前提・省略禁止）
+
+対象 Issue すべてに次のプレフィックス付きコメントを 1 件残す（`mcp__github__add_issue_comment`）:
+
+```
+[refinement] 決定: 取り組む（理由 1 文）
+[refinement] 決定: やめる（理由 1 文。再オープンで復帰できる旨を添える）
+[refinement] 決定: 束ねる(#Epic番号)（理由 1 文）
+[refinement] 決定: 保留(次回精査日: YYYY-MM-DD JST)（理由 1 文）
+```
+
+「やめる」のコメントには **再オープン導線** を必ず書く（誤クローズの最後の防衛線）:
+「必要と判明したら Issue を再オープンしてください（`state_reason=not_planned` は優先度上の見送りを意味し、否定ではありません）」。
+
+#### 同じ判定を繰り返して滞留させないためのサーキットブレーカー
+
+- **保留**: 同一 Issue に `[refinement] 決定: 保留` が **3 回連続** で付いていたら、4 回目は保留を選べない
+  （Q2 か Q3 のどちらかを強制する）。定期ルーティンの blocked 再評価「未解消 3 回で打ち切り」と同型。
+- **取り組む**: 同一 Issue が `[refinement] 決定: 取り組む` を **2 回連続** 受けてもなお着手されていない
+  （＝再び対象集合 `T` に現れた）場合、ラベル付け替えでは解決していない。この回は
+  **@owner に priority 引き上げか Issue 分割（sp 縮小）を諮り、その結果をコメントに記録する**。
+  それでも 3 回目に再登場したら Q2（やめる）を評価する（着手されない Issue を「取り組む」認定のまま
+  無限に持ち越さない）。
+
+#### 完了検証（実行の最後に必ず行う）
+
+`T` の各 Issue について、`[refinement] 決定:` プレフィックスの最新コメントが次のいずれかに一致することを確認する。
+
+```
+^\[refinement\] 決定: 取り組む
+^\[refinement\] 決定: やめる
+^\[refinement\] 決定: 束ねる\(#\d+\)
+^\[refinement\] 決定: 保留\(次回精査日: \d{4}-\d{2}-\d{2}
+```
+
+一致しない・存在しない Issue が残ったら「未処理 d 件（Issue 番号）」として報告する（R-1 手順 8 の
+「不一致 d 件」と同じ言い回し）。この検証は state ファイルを持たずコメント文字列だけで再計算できる。
+
 ### 整理モードの禁止パターン
 
 ```
@@ -149,6 +277,9 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 ❌ priority/sp を @owner を通さずメインが恣意的に決める（PO は @owner）
 ❌ 子 Issue を Epic 化と同時にクローズする
 ❌ status:* ラベルを @owner に操作させる（PO 権限境界 §4.1 違反）
+❌ Step G-6 の 4 出口判定を、対象件数が少ないことを理由にスキップする（1 件でも実行する）
+❌ Step G-6 で「やめる」を選びながら `[refinement] 決定:` コメント・再オープン導線を省く
+❌ Step G-1.5 の対象抽出に `triage_improvements.py`（type:improvement 固定）をそのまま使う（#335 と同型の取りこぼしになる）
 ```
 
 ---
@@ -213,6 +344,7 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 |--------|-------------|
 | 発見（完全版） | プロジェクト定義の発見スロット / `/self-improvement-loop` / 「横断レビューして」 |
 | 整理（棚卸し） | `type:improvement` が 30 件超滞留した時 / 月次の棚卸しスロット / `/self-improvement-loop --groom` / 「改善Issueを棚卸しして」「改善バックログを整理して」「Epic化して」 |
+| 整理（**リファインメント**・Step G-1.5 → G-6） | **週次ゲート**（プロジェクト定義の定期ルーティン・state は `config/backlog_refinement_state.json`）/ 「リファインメントして」「後回しになっている Issue を精査して」。件数閾値では発火しない（低優先スタベーションは在庫が少なくても起こるため） |
 | 消化（軽量版） | 日次の消化スロット / `/self-improvement-loop --consume` / 「改善Issue消化して」 |
 
 ## 関連ファイル
@@ -220,6 +352,8 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 | ファイル | 役割 |
 |---------|------|
 | `docs/rules/improvement-lane-map.md` | レーン境界の SSOT（振り返り・監査/衛生レーンとの分担） |
-| `tools/triage_improvements.py` | 整理モードの集計・分類・重複検出・Epic 候補抽出（副作用なし） |
+| `tools/triage_improvements.py` | 整理モードの集計・分類・重複検出・Epic 候補抽出（副作用なし・`type:improvement` 限定のため Step G-1.5 では使わない） |
+| `config/backlog_refinement_state.json` | リファインメント週次ゲートの state（`last_refinement_at`）。定期ルーティン側が着手前に更新して先勝ち排他する |
+| `.claude/skills/discussion-review/SKILL.md` | Step G-6 のグレーゾーン精査（専門チーム議論）の実行手段 |
 | `docs/rules/session-sprint-rules.md` | SP 基準（§3）・PO=@owner（§4） |
 | `.claude/agents/owner.md` | PO ロール定義（`priority:` / `sp:` ホワイトリスト） |
