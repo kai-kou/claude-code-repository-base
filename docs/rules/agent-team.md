@@ -188,14 +188,18 @@ background 実行（v2.1.198 以降の既定）では、**サブエージェン�
 | 上限 | 既定 | 環境変数 | 超過時のエラー |
 |------|------|---------|--------------|
 | 同時実行数 | 20（v2.1.217〜） | `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` | `Concurrent subagent limit reached`（再試行しないよう指示される） |
-| セッション合計 | 200（v2.1.212〜） | `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` | `Subagent spawn limit reached`（残作業は自分のツールで完了せよと指示される） |
+| セッション合計 | **v2.1.224 で撤廃**（v2.1.212〜223 は 200） | `CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION`（存続有無・意味は未確認） | 撤廃前は `Subagent spawn limit reached`（残作業は自分のツールで完了せよと指示される） |
 | ネスト深度 | 3 層（v2.1.219〜） | `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` | 深度上限のサブエージェントから `Agent` ツールが除去される（fork はツールは残りエラーを返す） |
 
+- 🔴 **v2.1.224 で「200-subagent-per-session spawn cap」が撤廃された**（"long-running sessions no longer
+  refuse new agents (concurrency and depth limits still apply)"・changelog 原文）。同時実行数・ネスト深度の
+  上限は従来どおり適用される。`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION` 環境変数が撤廃後も個別に上限を
+  設定する手段として残るかは公式 Docs に明記がなく未確認（次回の言及・実機確認まではこの行を保持する）。
 - 深度既定は **v2.1.217〜218 のあいだだけ 1**（ネスト不可）だった。この時期に「サブエージェントが子を
-  起動できず期待外の結果を返す」現象が集中しうる。現行 v2.1.220 では 3 層に復帰している。
+  起動できず期待外の結果を返す」現象が集中しうる。現行 v2.1.220 以降は 3 層に復帰している。
 - 同時実行の枠は `/subtask` のフォークや **完了済みサブエージェントの再開** も消費する（再開は上限チェックを
   経ずに枠を取るため、実行数が上限を超えることがある）。
-- `/clear` でセッション合計はリセットされる。ultracode 有効セッションは同時実行上限の対象外。
+- `/clear` でセッション合計（撤廃前の挙動）はリセットされていた。ultracode 有効セッションは同時実行上限の対象外。
 - workflow の `agent()` と Agent Teams の teammate は **別枠**（それぞれ独自の上限に従う）。
 
 ### F-10. 既に修正済みの関連バグ（v2.1.216・履歴として保持）

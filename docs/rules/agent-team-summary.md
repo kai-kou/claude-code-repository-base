@@ -66,8 +66,9 @@ Agent Teams の制約（teammate から background 不可・nested team 不可�
 - **そのターン内で結果が要るなら `run_in_background: false`**（同期実行）。セッション全体で同期にするなら
   `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`（frontmatter `background: false` は同期化の手段として
   公式定義されていない）。完了済みは `/tasks` に done で残り、`SendMessage` で再開できる。
-- **3 上限**（超過は spawn 失敗）: 同時 20 / セッション合計 200 / ネスト深度 3（v2.1.219〜。
-  v2.1.217〜218 だけ 1 だった）。詳細と環境変数は `agent-team.md` §F-8〜F-10。
+- **上限**（超過は spawn 失敗）: 同時 20 / ネスト深度 3（v2.1.219〜。v2.1.217〜218 だけ 1 だった）。
+  **セッション合計 200 の上限は v2.1.224 で撤廃**（長時間セッションでも新規エージェント作成を拒否しなくなった）。
+  詳細と環境変数は `agent-team.md` §F-8〜F-10。
 
 ## Haiku サブエージェント向けプロンプト先頭テンプレート
 
