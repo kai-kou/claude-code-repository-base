@@ -106,26 +106,44 @@ API アクセスは付かない。`add_repo(access:"push")` が公式の解決�
 
 ## L-117: タスク実行モードによっては `add_repo` 自体が提供されず、クロスリポ参照が git/MCP 双方で 403 になる
 
-**症状**: GitHub Issue/PR 対応のリモートタスク実行モード（システムプロンプト冒頭に「Repository Scope」が
-タスク起動元の単一リポジトリで明示される形態）では、`mcp__Claude_Code_Remote__add_repo` がツールリストに
-存在しない（ToolSearch でもヒットしない）。この状態でスコープ外リポジトリへ `git ls-remote` / `git clone`
-を実行すると **403** で失敗する（実機検証 2026-06-30・2026-07-01: スコープ外リポジトリへの
-`git ls-remote` が一貫して 403、対してスコープ内リポジトリは成功）。`apply-base` スキル等の
-クロスリポ参照を前提とするスキルが「git clone は常に通る」と想定していると、このモードでは成立しない。
+**症状**: GitHub Issue/PR 対応のリモートタスク実行モードに加え、**4 時間ごとの scheduled trigger
+（本リポジトリの R-1）セッションでも同様** に `mcp__Claude_Code_Remote__add_repo` がツールリストに
+存在しない（ToolSearch でもヒットしない・実機再検証 2026-08-07・Issue #443）。`add_repo` 不在は
+「GitHub Issue/PR 起動」固有の制約ではなく、**インタラクティブな claude.ai/code Web セッション以外の
+自動タスク実行モード全般** に及ぶと判断する。
 
-**根本原因**: Anthropic は 2026-07-01 時点で、1 セッション/タスクに複数リポジトリを恒久的に紐付ける
+スコープ外リポジトリへの到達可否は **読み取りと書き込みで挙動が異なりうる**:
+- **読み取り専用 `git clone`**: 2026-08-07 実機再検証では、対象が **public** リポジトリ
+  （`kai-kou/claude-code-repository-base`）への `git clone` が exit 0 で成功した。一方
+  2026-06-30・07-01 の実機検証ではスコープ外リポジトリへの `git ls-remote` が一貫して 403 だった
+  （対象リポジトリの public/private は当時の記録に明記されておらず、今回の成功例と同一条件の
+  再現とは断定できない）。**「read は public なら通る」と一般化せず、都度 `git ls-remote`/
+  `git clone --depth 1` で実際に確認してから可否を判定する**（`apply-base` 等のクロスリポ参照を
+  前提とするスキルが「git clone は常に通る」と決め打ちすると、この揺れを踏む）。
+- **書き込み `git push`**: 2026-08-07 実機再検証では public リポジトリへの push も 403 だった
+  （プロキシが明示メッセージを返す:
+  `access denied by the git proxy: <owner>/<repo> is not in this session's authorized repository set,
+  so the proxy will not inject a credential for it. To fix, add the repository to the session's sources.`）。
+  `mcp__github__*` 等の GitHub API 系ツールも、システムプロンプトの「Repository Scope」に列挙された
+  リポジトリ以外には到達できない（API 呼び出し自体が拒否される）。
+
+**根本原因**: Anthropic は 2026-08-07 時点で、1 セッション/タスクに複数リポジトリを恒久的に紐付ける
 公式機能を提供していない（`anthropics/claude-code` issue #23627 がオープンの feature request。
 類似要望の #27934 は #23627 の重複としてクローズ済み）。
 `add_repo` によるスコープ動的拡張は **インタラクティブな claude.ai/code Web セッション限定の機能** であり、
-GitHub Issue/PR からの自動トリガー型タスクには搭載されない。
+GitHub Issue/PR からの自動トリガー型タスクにも scheduled trigger タスクにも搭載されない。
 
 **対策**:
-- クロスリポ参照（`apply-base` での他リポジトリ取得等）が必要な作業は、
-  `add_repo` が使えるインタラクティブな claude.ai/code セッション（ユーザーが直接チャットで指示する
-  通常のセッション）で実行する。
-- GitHub Issue/PR 自動対応タスクの中で `git ls-remote`/`git clone` がスコープ外リポジトリに対し 403 を
-  返したら、GH_TOKEN・ネットワーク設定の問題と誤診断してリトライを繰り返さない。直ちに
-  「このタスク実行モードでは未対応。通常の claude.ai/code セッションで再実行が必要」と判定し、
-  ユーザーにその旨を案内する（A-6 ではなく、Anthropic 側の機能制約として報告する）。
+- クロスリポ参照（`apply-base` での他リポジトリ取得・`publish-sync` での公開リポジトリ push 等）が
+  必要な作業は、`add_repo` が使えるインタラクティブな claude.ai/code セッション（ユーザーが直接チャットで
+  指示する通常のセッション）で実行する。
+- 自動タスク実行モード（GitHub Issue/PR 対応・scheduled trigger のいずれも）で `git ls-remote`/`git clone`/
+  `git push` がスコープ外リポジトリに対し 403 を返したら、GH_TOKEN・ネットワーク設定の問題と誤診断して
+  リトライを繰り返さない。直ちに「このタスク実行モードでは未対応。通常の claude.ai/code セッションで
+  再実行が必要」と判定し、その旨を Issue に記録する（A-6 ではなく、Anthropic 側の機能制約として報告する。
+  scheduled trigger の場合はユーザーが直接見ていないため、チャット案内ではなく Issue 記録が必須）。
+- **public リポジトリの読み取りだけなら通ることがある** ため、「add_repo 不在 = 完全に到達不能」と即断せず、
+  push を試みるコマンド（`git push --dry-run` 等）で実際に確認してから「未対応」と判定する
+  （読み取り可否だけで書き込み可否を推定しない）。
 - 恒久的な複数リポジトリアクセスの公式機能がリリースされたら、本エントリとクロスリポ参照系スキルの
   前提を更新する（CP-2）。
