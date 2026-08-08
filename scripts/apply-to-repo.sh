@@ -193,12 +193,26 @@ SYNC_PATHS=(
   "modules.yaml"
   ".mcp.json"
   "requirements.txt"
+  # config/ は性質ごとに個別指定する（ディレクトリ丸ごとにしない・Issue #448）。
+  # 丸ごと同期すると state ファイルまで上書きされ、下流の実行状態がベースの値へ巻き戻る。
+  "config/claude_code_spec_sync.yaml"    # tools/check_claude_code_updates.py が起動時に読む。
+                                         # 既定値フォールバックが無く、不在だとロード自体が失敗する
+  "config/broker_workflows.json.example" # プレースホルダのみの雛形。実ファイル（.json）は下流が作る
 )
-# 既存があれば保護（プロジェクト固有・--overwrite-project で上書き）
+# 既存があれば保護（プロジェクト固有・--overwrite-project で上書き）。
+# 既存がなければ配置し、既存があれば維持してベース版を `<path>.base` として並置する。
 PROTECT_PATHS=(
   "CLAUDE.md"
   "docs/project-mission.md"
+  # config/ のうち「下流が追記して拡張する」契約をファイル自身が明記しているもの（Issue #448）。
+  # SYNC 側に置くと cp -a の無条件上書きで下流の追記が必ず失われる。
+  "config/publish_events.yaml"
+  "config/data_only_path_prefixes.txt"
+  "config/pr_review_comment_categories.json"
 )
+# 意図的に配布しない config/: config/backlog_refinement_state.json（実行状態そのもの。
+# 配ると新規下流に著者環境の last_refinement_at が初期値として入り、週次ゲートが
+# 初回から誤って「実行済み」と判定する。読み手は不在時に「未実行」として初回に自動生成する）
 
 # --- 2.5 アップデート確認（前回適用マーカーとの差分表示）---
 # 前回適用時に記録した .claude/base-sync-state.json（適用済みベース SHA・日時）を基準点に、

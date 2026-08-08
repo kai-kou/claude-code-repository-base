@@ -31,6 +31,26 @@
 
 ---
 
+## 2026-08-08（Issue #448）config/ を配布対象に追加・下流に届かないパス参照の解消
+
+- **変更内容**: ① `scripts/apply-to-repo.sh` の配布定義に `config/` の 5 ファイルを性質ごとに追加した
+  （`SYNC_PATHS` に `config/claude_code_spec_sync.yaml`・`config/broker_workflows.json.example`、
+  `PROTECT_PATHS` に `config/publish_events.yaml`・`config/data_only_path_prefixes.txt`・
+  `config/pr_review_comment_categories.json`）。`config/backlog_refinement_state.json` は実行状態そのもので、
+  配ると新規下流の週次ゲートが著者環境のタイムスタンプで誤抑制されるため **配布対象外**（公開スナップショットからも除外）
+  ② 本ファイルへの参照 2 件（`apply-base` / `audit-runner` の SKILL.md）を地の文へ言い換えた。本ファイルは下流に
+  配置されず `apply-to-repo.sh` が実行時に読み上げる設計のため、パス表記のままだと全下流でリンク切れとして検出され続けていた
+  ③ `tools/check_skill_references.py` に `--downstream` モードを追加し、配布定義（`SYNC_PATHS` + `PROTECT_PATHS`）に
+  届かないパスを SKILL.md / ルールが参照していないかを機械検知できるようにした。下流の再現環境でリンク切れが
+  **6 件 → 0 件**（`config/` 未配布が原因の 4 件も同時に解消）
+- **下流で必要な手動手順**: ① 再適用すると `config/claude_code_spec_sync.yaml` と
+  `config/broker_workflows.json.example` は **ベース版で無条件上書き** される。この 2 件を独自に書き換えている
+  下流は、再適用前に差分を退避すること（以後はベースの更新が自動的に届く）
+  ② `config/publish_events.yaml`・`config/data_only_path_prefixes.txt`・`config/pr_review_comment_categories.json` は
+  **既存があれば保護** され、ベース版は `<パス>.base` として並置される。プロジェクト固有の追記を保ったまま、
+  `.base` と見比べてベース側の新しい既定値を取り込むこと（`.base` の取り込みは `apply-base` スキル §3 の手順と同じ）
+  ③ `config/backlog_refinement_state.json` は配布されない。既に持っている下流はそのまま維持され、
+  持っていない下流は `self-improvement-loop` の初回実行時に自動生成される（手動作成は不要）
 ## 2026-08-08（Issue #449）PostToolUse フックを追加（`.claude/settings.json` に配線 1 行の追記が必要）
 
 **変更内容**:

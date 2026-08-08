@@ -154,7 +154,8 @@ Issue 本文には必ず **監査プロトコルの URL と実行日**、およ�
 1. 作業ブランチで実装 → `python3 tools/check_cjk_markdown.py --fix --changed` → 各種チェック
 2. `mcp__github__create_pull_request`（本文に `Sprint Goal:` / `sp:N` / `Session-Id:` / `Closes #N`）
 3. **Layer 1 セルフレビュー**（`Skill(code-review)`）→ 指摘対応 → マージ（`docs/rules/pr-review-flow-summary.md`）
-4. 下流影響（設定ファイル・配線ファイルの変更）があれば同一 PR で `docs/base-update-notes.md` に追記する
+4. 下流影響（設定ファイル・配線ファイルの変更）があれば、ベースリポジトリ側の移行ノート
+   （base-update-notes・下流には配布されず apply-to-repo.sh が実行時に読み上げる）へ同一 PR で追記する
 
 **採用しなかった指摘も PR 本文に理由付きで記録する**（次回監査で同じ議論を繰り返さないため）。
 

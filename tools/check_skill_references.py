@@ -71,6 +71,58 @@ IGNORE_BLOCK_START = "<!-- refcheck:ignore-start -->"
 IGNORE_BLOCK_END = "<!-- refcheck:ignore-end -->"
 
 
+# --- 下流到達性チェック（--downstream・#448）----------------------------------
+# 「下流に配布されないファイルを SKILL.md / ルールが参照する」穴を検知する。ベース本体では
+# 実在するためリンク切れにならず、apply-base で配布された下流でだけ壊れるので目視では見つからない。
+# 判定の材料は配布定義そのもの（apply-to-repo.sh の SYNC_PATHS + PROTECT_PATHS）から読むため、
+# 配布対象が変われば判定も自動追従する（独立した除外リストを持たない・#211 と同じ設計）。
+APPLY_SCRIPT = REPO_ROOT / "scripts" / "apply-to-repo.sh"
+PUBLISH_SCRIPT = REPO_ROOT / "scripts" / "publish-snapshot.sh"
+# SYNC_PATHS ループの外側にある専用ステップで配布されるため、配列には現れない
+EXTRA_DOWNSTREAM_PATHS = {".claude/settings.json"}
+
+
+def _bash_array_values(text: str, name: str) -> list[str]:
+    """`NAME=( "a" "b" )` 形式の bash 配列から値を取り出す（# 以降はコメントとして捨てる）。
+
+    1 行に複数要素が書かれていても取りこぼさない（行全体の fullmatch にすると
+    `"a" "b"` のような行が丸ごと無音で消え、配布判定から漏れたパスが false positive を生む）。
+    """
+    match = re.search(rf"^{name}=\((.*?)^\)", text, re.MULTILINE | re.DOTALL)
+    if not match:
+        return []
+    values: list[str] = []
+    for line in match.group(1).splitlines():
+        line = line.split("#", 1)[0]
+        values.extend(re.findall(r'"([^"]+)"', line))
+    return values
+
+
+def load_distribution_paths() -> tuple[set[str], set[str]] | None:
+    """(下流に届くパス, 公開スナップショットから除外されるパス) を配布スクリプトから読む。
+
+    どちらかのスクリプトが無い（下流に配布された環境等）場合は None を返し、呼び出し側は
+    到達性チェックをスキップする。
+    """
+    if not APPLY_SCRIPT.exists():
+        return None
+    apply_text = APPLY_SCRIPT.read_text(encoding="utf-8", errors="replace")
+    delivered = set(_bash_array_values(apply_text, "SYNC_PATHS"))
+    delivered |= set(_bash_array_values(apply_text, "PROTECT_PATHS"))
+    if not delivered:
+        return None
+    delivered |= EXTRA_DOWNSTREAM_PATHS
+    denied: set[str] = set()
+    if PUBLISH_SCRIPT.exists():
+        publish_text = PUBLISH_SCRIPT.read_text(encoding="utf-8", errors="replace")
+        denied = set(_bash_array_values(publish_text, "PUBLISH_DENYLIST"))
+    return delivered, denied
+
+
+def _covered_by(ref: str, paths: set[str]) -> bool:
+    return any(ref == p or ref.startswith(p.rstrip("/") + "/") for p in paths)
+
+
 def collect_target_files() -> list[Path]:
     files: list[Path] = []
     for pattern in TARGET_GLOBS:
@@ -109,7 +161,13 @@ def extract_referenced_paths(text: str) -> set[str]:
     return referenced
 
 
-def check_file(path: Path, bloat_threshold: int, *, check_bloat: bool = True) -> dict:
+def check_file(
+    path: Path,
+    bloat_threshold: int,
+    *,
+    check_bloat: bool = True,
+    distribution: tuple[set[str], set[str]] | None = None,
+) -> dict:
     text = path.read_text(encoding="utf-8", errors="replace")
     # wc -l と一致させる（改行文字数そのもの・末尾改行の有無で +1 しない）
     line_count = text.count("\n")
@@ -117,12 +175,25 @@ def check_file(path: Path, bloat_threshold: int, *, check_bloat: bool = True) ->
     missing = sorted(
         ref for ref in referenced if not (REPO_ROOT / ref).exists()
     )
+    rel = str(path.relative_to(REPO_ROOT))
+    undelivered: list[str] = []
+    if distribution is not None:
+        delivered, denied = distribution
+        # 自分自身が下流へ配布されないファイル（公開スナップショットの除外対象）は、
+        # 下流に存在しない以上そこでの参照も壊れようがないので検査しない
+        if _covered_by(rel, delivered) and not _covered_by(rel, denied):
+            undelivered = sorted(
+                ref
+                for ref in referenced
+                if not _covered_by(ref, delivered) or _covered_by(ref, denied)
+            )
     return {
-        "file": str(path.relative_to(REPO_ROOT)),
+        "file": rel,
         "line_count": line_count,
         "bloated": check_bloat and line_count > bloat_threshold,
         "referenced_count": len(referenced),
         "missing_references": missing,
+        "undelivered_references": undelivered,
     }
 
 
@@ -165,8 +236,35 @@ SELF_TEST_CASES = [
 ]
 
 
+# 配布定義パーサの自己テスト（#448）。ここが黙って要素を取りこぼすと、実際は配布されている
+# パスが --downstream で「未到達」と誤警告される（false positive）ため機械的に固定する
+ARRAY_PARSE_TEST_CASES = [
+    (
+        "1 要素 1 行の配列を読める",
+        'ARR=(\n  "docs/rules"\n  "tools"\n)\n',
+        ["docs/rules", "tools"],
+    ),
+    (
+        "1 行に複数要素があっても取りこぼさない",
+        'ARR=(\n  "a" "b"\n  "c"\n)\n',
+        ["a", "b", "c"],
+    ),
+    (
+        "インラインコメント内のパスは拾わない",
+        'ARR=(\n  "tools"   # 実体は "docs/rules" にある\n)\n',
+        ["tools"],
+    ),
+    (
+        "コメント行だけの行は無視される",
+        'ARR=(\n  # "commented/out.md"\n  "tools"\n)\n',
+        ["tools"],
+    ),
+    ("配列が存在しなければ空", 'OTHER=(\n  "x"\n)\n', []),
+]
+
+
 def run_self_test() -> int:
-    """除外規約が「検出すべきものを検出し、除外すべきものだけ除外する」ことを検証する。
+    """除外規約と配布定義パーサが期待どおり動くことを検証する。
 
     除外規約が過剰になると本チェック自体が無音化するため、機械的に固定する（#349/#350）。
     """
@@ -178,6 +276,13 @@ def run_self_test() -> int:
         else:
             failures += 1
             print(f"  ❌ {label}\n     期待: {sorted(expected)}\n     実際: {sorted(actual)}")
+    for label, text, expected_list in ARRAY_PARSE_TEST_CASES:
+        actual_list = _bash_array_values(text, "ARR")
+        if actual_list == expected_list:
+            print(f"  ✅ {label}")
+        else:
+            failures += 1
+            print(f"  ❌ {label}\n     期待: {expected_list}\n     実際: {actual_list}")
     print(f"\n{'✅ self-test PASS' if not failures else f'❌ self-test FAIL: {failures} 件'}")
     return 1 if failures else 0
 
@@ -197,6 +302,14 @@ def main() -> int:
         help="docs/rules 間の参照検証をスキップする（既定は検証する・#349）",
     )
     parser.add_argument(
+        "--downstream",
+        action="store_true",
+        help=(
+            "下流へ配布されないパスへの参照を警告する（apply-to-repo.sh の SYNC_PATHS + "
+            "PROTECT_PATHS を基準に判定・#448）。既定では終了コードを変えない"
+        ),
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="除外規約の自己テストを実行する（過剰除外による無音化の防止）",
@@ -206,17 +319,23 @@ def main() -> int:
     if args.self_test:
         return run_self_test()
 
+    distribution = load_distribution_paths() if args.downstream else None
     skill_files = collect_target_files()
     rules_files = [] if args.skip_rules else collect_rules_files()
-    results = [check_file(p, args.bloat_threshold) for p in skill_files]
+    results = [
+        check_file(p, args.bloat_threshold, distribution=distribution)
+        for p in skill_files
+    ]
     results += [
-        check_file(p, args.bloat_threshold, check_bloat=False) for p in rules_files
+        check_file(p, args.bloat_threshold, check_bloat=False, distribution=distribution)
+        for p in rules_files
     ]
     broken = [r for r in results if r["missing_references"]]
     bloated = [r for r in results if r["bloated"]]
+    undelivered = [r for r in results if r["undelivered_references"]]
 
     if args.json:
-        print(json.dumps({"results": results, "broken": broken, "bloated": bloated}, ensure_ascii=False, indent=2))
+        print(json.dumps({"results": results, "broken": broken, "bloated": bloated, "undelivered": undelivered}, ensure_ascii=False, indent=2))
     else:
         print(
             f"検査対象: {len(results)} ファイル"
@@ -234,6 +353,19 @@ def main() -> int:
                 print(f"  - {r['file']}: {r['line_count']} 行")
         else:
             print(f"✅ 肥大化なし（閾値 {args.bloat_threshold} 行）")
+        if args.downstream:
+            if distribution is None:
+                print("\n- 下流到達性チェック: 配布定義（scripts/apply-to-repo.sh）が無いためスキップ")
+            elif undelivered:
+                print(f"\n⚠️ 下流に配布されないパスへの参照: {len(undelivered)} ファイル")
+                for r in undelivered:
+                    print(f"  - {r['file']}: {', '.join(r['undelivered_references'])}")
+                print(
+                    "  → 配布対象に加えるか、参照を地の文へ言い換えるか、"
+                    "実行時生成物なら <!-- refcheck:ignore --> を付ける（#448）"
+                )
+            else:
+                print("\n✅ 下流に配布されないパスへの参照なし")
 
     return 1 if (broken or bloated) else 0
 

@@ -115,7 +115,7 @@ python3 tools/triage_improvements.py --json > /tmp/groom.json     # 機械処理
 
 > **目的**: R-1 の選択順（priority 降順 → sp 昇順）で **構造的に永久に選ばれない** Issue と、
 > ブロック要因の再評価だけでは「そもそも要るのか」を問われない Issue を拾い上げる。
-> **入口**: プロジェクト定義の定期ルーティンに配線した週次ゲート（state は `config/backlog_refinement_state.json` の `last_refinement_at`。ファイルが無ければ「未実行」とみなして実行し、初回に作成する）。
+> **入口**: プロジェクト定義の定期ルーティンに配線した週次ゲート（state は `config/backlog_refinement_state.json` の `last_refinement_at`。ファイルが無ければ「未実行」とみなして実行し、初回に作成する）。 <!-- refcheck:ignore -->
 > 手動起動（「リファインメントして」）でも同じ手順を実行する。
 
 Step G-1 のレポート（`triage_improvements.py`）は `type:improvement` に限定されるため **本 Step では使わない**。
@@ -344,7 +344,7 @@ ELSE（{{...}} 雛形のまま＝bootstrap 直後のプロジェクト）:
 |--------|-------------|
 | 発見（完全版） | プロジェクト定義の発見スロット / `/self-improvement-loop` / 「横断レビューして」 |
 | 整理（棚卸し） | `type:improvement` が 30 件超滞留した時 / 月次の棚卸しスロット / `/self-improvement-loop --groom` / 「改善Issueを棚卸しして」「改善バックログを整理して」「Epic化して」 |
-| 整理（**リファインメント**・Step G-1.5 → G-6） | **週次ゲート**（プロジェクト定義の定期ルーティン・state は `config/backlog_refinement_state.json`）/ 「リファインメントして」「後回しになっている Issue を精査して」。件数閾値では発火しない（低優先スタベーションは在庫が少なくても起こるため） |
+| 整理（**リファインメント**・Step G-1.5 → G-6） | **週次ゲート**（プロジェクト定義の定期ルーティン・state は `config/backlog_refinement_state.json`）/ 「リファインメントして」「後回しになっている Issue を精査して」。件数閾値では発火しない（低優先スタベーションは在庫が少なくても起こるため） <!-- refcheck:ignore --> |
 | 消化（軽量版） | 日次の消化スロット / `/self-improvement-loop --consume` / 「改善Issue消化して」 |
 
 ## 関連ファイル
@@ -353,7 +353,7 @@ ELSE（{{...}} 雛形のまま＝bootstrap 直後のプロジェクト）:
 |---------|------|
 | `docs/rules/improvement-lane-map.md` | レーン境界の SSOT（振り返り・監査/衛生レーンとの分担） |
 | `tools/triage_improvements.py` | 整理モードの集計・分類・重複検出・Epic 候補抽出（副作用なし・`type:improvement` 限定のため Step G-1.5 では使わない） |
-| `config/backlog_refinement_state.json` | リファインメント週次ゲートの state（`last_refinement_at`）。定期ルーティン側が着手前に更新して先勝ち排他する |
+| `config/backlog_refinement_state.json` | リファインメント週次ゲートの state（`last_refinement_at`）。定期ルーティン側が着手前に更新して先勝ち排他する。**配布対象外** で、無ければ初回実行時に自動生成される（#448） <!-- refcheck:ignore --> |
 | `.claude/skills/discussion-review/SKILL.md` | Step G-6 のグレーゾーン精査（専門チーム議論）の実行手段 |
 | `docs/rules/session-sprint-rules.md` | SP 基準（§3）・PO=@owner（§4） |
 | `.claude/agents/owner.md` | PO ロール定義（`priority:` / `sp:` ホワイトリスト） |
