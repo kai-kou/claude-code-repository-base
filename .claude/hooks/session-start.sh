@@ -327,6 +327,16 @@ if [ -f "$_ctx_file" ]; then
 fi
 unset _ctx_file _ctx_gen
 
+# --- 公開リポジトリ反映レーンの回収指示（#449）---
+# 反映（push）は add_repo が使えるインタラクティブセッションでしか完遂できない（L-117）。
+# 一方 main へのマージはその多くが scheduled trigger セッション（R-1）で起きるため、
+# 「マージしたセッションが反映する」だけでは滞留が残る。そこで **インタラクティブセッションの
+# 冒頭** を回収点として明示する。ここでドリフト判定そのものは走らせない（公開側の clone を伴い
+# 毎セッション数秒〜数十秒かかるため）。判定はセッション側が最初のツール呼び出しで行う。
+if [ -f "${PROJECT_DIR}/tools/check_publish_drift.py" ]; then
+  printf '\n📦 【公開リポジトリ反映レーン】このセッションが公開リポジトリを attach できる（`add_repo` が使える）インタラクティブセッションなら、作業の早い段階で `python3 tools/check_publish_drift.py --quiet` を実行し、終了コードが 1 または 2 のときは `publish-sync` スキルで反映まで完遂すること（ユーザー確認は不要）。無人セッションでは push が 403 になるため、`[publish-sync]` Issue への記録までで止めてよい。\n\n'
+fi
+
 # --- PR レビュー待機状態チェック（セッションタイムアウト復帰・CP-4 対策）---
 # ⚠ 本スクリプトは冒頭で CLAUDE_CODE_REMOTE=true のときだけ本体を実行する。クラウドでは
 # check_pending_pr_reviews.py が依存する gh の repo 操作が egress プロキシに 403 でブロックされ

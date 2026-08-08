@@ -25,7 +25,7 @@
 | 5 | `PreToolUse` | ツール実行前（matcher: tool_name）。permissionDecision で allow/deny/ask/defer | ✅ 採用（pre-tool-use-router.sh・Bash） |
 | 6 | `PermissionRequest` | 権限プロンプト発生時。decision.behavior で allow/deny | ✅ 採用（permission-request-auto-allow.sh） |
 | 7 | `PermissionDenied` | 権限が拒否されたとき | ⬜ 未採用 |
-| 8 | `PostToolUse` | ツール成功後（matcher: tool_name） | ✅ 採用（post-tool-use-validate.sh） |
+| 8 | `PostToolUse` | ツール成功後（matcher: tool_name） | ✅ 採用（post-tool-use-validate.sh / post-merge-publish-check.sh・#449） |
 | 9 | `PostToolUseFailure` | ツール失敗後 | ✅ 採用（post-tool-use-failure.sh・Bash） |
 | 10 | `PostToolBatch` | 並列ツール呼び出しのバッチ解決後・次のモデル呼び出し前 | ⬜ 未採用 |
 | 11 | `Notification` | Claude Code が通知を送るとき（matcher: permission_prompt/idle_prompt 等・`message` フィールド）。decision 制御なし | ⬜ **未採用（観測専用・後述）** |

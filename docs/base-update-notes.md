@@ -31,6 +31,34 @@
 
 ---
 
+## 2026-08-08（Issue #449）PostToolUse フックを追加（`.claude/settings.json` に配線 1 行の追記が必要）
+
+**変更内容**:
+
+- `.claude/hooks/post-merge-publish-check.sh` を新設した。`mcp__github__merge_pull_request` の成功を
+  PostToolUse で検知し、公開反映レーンのドリフトを判定して反映指示を注入する。
+- ベース側では「main へマージした瞬間」を配布反映の主経路に変更した（従来はセッション終了時と
+  4 時間周期のルーティン頼みで、反映が最大十数時間滞留していた）。
+- `.claude/hooks/session-start.sh` に、公開反映レーンの回収指示を注入する分岐を追加した
+  （`tools/check_publish_drift.py` が存在するときだけ出力する）。
+
+**下流で必要な手動手順**:
+
+- **公開リポジトリへスナップショットを配る運用（publish-sync レーン）を持たない下流では、対応不要**。
+  新フックは `tools/check_publish_drift.py`（ベース側でのみ配布される）が無い環境では即 `exit 0` し、
+  `session-start.sh` の分岐も出力しないため、配線を入れても無害に不発する。
+- 自前の publish レーンを持つ下流、またはベースと同じ配線を保ちたい下流は、`.claude/settings.json` の
+  `hooks.PostToolUse` 配列に次の 1 エントリを追記する（既存の `post-tool-use-validate.sh` エントリは残す）:
+
+  ```json
+  { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-merge-publish-check.sh", "timeout": 90 } ] }
+  ```
+
+- 配線後は `bash .claude/hooks/post-merge-publish-check.sh --self-test` が `PASS=12 FAIL=0` を返すことを
+  確認する（検知ロジックと origin URL 解析のみのテストで、ネットワークに依存しない）。
+
+---
+
 ## 2026-08-02（下流リポジトリの実測監査からの還流）機密ファイルガードを全面刷新（下流で同ファイルを独自改変している場合は差し替えてください）
 
 **変更内容**:

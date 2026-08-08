@@ -8,7 +8,8 @@
 ```
 実装 → セルフレビュー（self-reviewer）→ PR 作成 → Slack 通知
   → Layer 0 機械ゲート + Layer 1 観点別フレッシュ文脈セルフレビュー（主軸・全 PR 必須・自己実行）
-  → 指摘対応（修正コミット or スキップ + 返信 + Resolve）→ Layer 0+1 通過で自動マージ（squash）→ Slack 完了通知
+  → 指摘対応（修正コミット or スキップ + 返信 + Resolve）→ Layer 0+1 通過で自動マージ（squash）
+  → **公開反映（publish-sync・マージした同一セッションで完遂）** → Slack 完了通知
 ```
 
 - **🟢 恒久承認**: 実装完了したら確認なしで PR まで進める（SSOT: `CLAUDE.md`「PR 作成の完全自律化」）。「PR 作成してよいですか？」は禁止。
@@ -30,7 +31,8 @@
 | タイミング | アクション |
 |---------|-----------|
 | PR 作成直後 | Layer 1 セルフレビュー → 指摘対応（修正コミット or スキップ + 返信 + Resolve） |
-| Layer 0+1 通過後 | `mcp__github__merge_pull_request`（`merge_method="squash"`）で即マージ → Slack 完了通知 |
+| Layer 0+1 通過後 | `mcp__github__merge_pull_request`（`merge_method="squash"`）で即マージ |
+| **マージ直後** | **公開リポジトリへ反映（`publish-sync`）**。`post-merge-publish-check.sh` がドリフトを判定して指示を注入する。反映できないセッション（`add_repo` 不在・L-117）は `[publish-sync]` Issue に記録して終える（沈黙禁止・#449）→ Slack 完了通知 |
 | 任意 | CI 失敗・人手コメントがあれば対応してからマージ |
 
 サーキットブレーカー: 修正サイクル 2 回超で STOP → ユーザー報告（A-4）。
@@ -52,6 +54,8 @@ python3 tools/check_pending_pr_reviews.py --actionable-only --json          # �
 ```
 
 `needs_prompt` → Layer 1 セルフレビュー実行 → 指摘解消 → 即マージ / `needs_response` → 指摘対応（CI 失敗・人手コメント）/ `awaiting_review` → 作成セッションが実行中（待機）。
+
+**公開反映の回収も復帰時の責務（#449）**: `python3 tools/check_publish_drift.py --quiet` が 1（ドリフトあり）/ 2（判定不能）なら、`publish-sync` スキルで反映まで完遂する。`[publish-sync]` の open Issue は「前のセッションが反映できずに残した積み残し」なので最優先で消化してクローズする。
 
 - **自スコープ優先（#47）**: `--mine` は PR 本文の `Session-Id` トレーラーで自 PR を決定論的に識別する。時間ベースの除外を受けないため、圧縮・再起動後も確実に回収できる
 - **他セッション対応中の PR には介入しない（CP-4・L-109）**: 直近 10 分以内に人間側アクティビティがある PR は `active_session: true` として `--actionable-only` から自動除外される。**出力に現れない PR には触れない**（催促・指摘対応・マージ・subscribe をしない。`--include-active` での強制取得も禁止）

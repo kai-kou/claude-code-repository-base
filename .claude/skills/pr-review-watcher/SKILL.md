@@ -110,8 +110,23 @@ Layer 0+1 通過後 : 即自動マージ（外部レビュアー応答待ちな�
 | 3 | 指摘への自動対応（修正コミット or スキップ → スレッド返信 → **Resolve 必須**） |
 | 4 | Layer 0（機械ゲート）+ Layer 1 通過の確認 |
 | 5 | 自動マージ（squash・外部レビュアー応答待ちなし） |
-| 6 | レビュー完了サマリーを **PR スレッドのみ** に記録（サイレント・L-102） |
-| 7 | マージ後フィードバックループ → `docs/rules/lessons/pr-review.md` に教訓追記（必須・`lessons-management.md` に従う） |
+| 6 | **公開リポジトリへの反映（`publish-sync`）**。マージで生まれた差分をこのセッション内で反映まで完遂する。詳細は下記 |
+| 7 | レビュー完了サマリーを **PR スレッドのみ** に記録（サイレント・L-102） |
+| 8 | マージ後フィードバックループ → `docs/rules/lessons/pr-review.md` に教訓追記（必須・`lessons-management.md` に従う） |
+
+### Step 6: マージ直後の公開反映（#449）
+
+マージした瞬間が、公開リポジトリとのドリフトが生まれる瞬間である。**反映をセッション終了時や次回の
+定期ルーティンに先送りしない**（先送りが実際に 13〜17 時間の滞留を生んだ・#449）。
+
+- `post-merge-publish-check.sh`（PostToolUse・matcher `mcp__github__merge_pull_request`）が
+  マージ成功を検知してドリフトを判定し、反映が要るときだけ指示を注入する。指示が来たら
+  `publish-sync` スキルに従って **push まで完遂する**（ユーザー確認は不要）。
+- **反映できないセッションでも黙って終わらせない**。`add_repo` が提供されない自動タスク実行モード
+  （scheduled trigger・GitHub Issue/PR 起動・L-117）では push が 403 になるため、その場で
+  `publish-sync` スキルの §5 に従って `[publish-sync]` Issue に失敗段階を記録する。
+- ローカル実行で `gh pr merge` を使った場合はフックの matcher（MCP ツール）に掛からない。
+  セッション終了時の `stop-publish-check.sh` が backstop として拾う。
 
 ## サイレント原則（L-102・最重要）
 

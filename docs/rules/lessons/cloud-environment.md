@@ -127,6 +127,13 @@ API アクセスは付かない。`add_repo(access:"push")` が公式の解決�
   `mcp__github__*` 等の GitHub API 系ツールも、システムプロンプトの「Repository Scope」に列挙された
   リポジトリ以外には到達できない（API 呼び出し自体が拒否される）。
 
+**`create_session` による子セッションでも回避できない（2026-08-08 実機検証・#449）**: 親セッションから
+`mcp__Claude_Code_Remote__create_session` で子セッションを起こし、そこで `add_repo` → clone → push を
+試させても、`add_repo` は分類器にブロックされ `git push --dry-run` は 403 を返した。**「無人セッションが
+push できないなら、push できるセッションを自分で起こせばよい」という回避策は成立しない**。
+ルーティンの `session_context.sources` は配列だが、`create_trigger` / `update_trigger` のどちらも
+sources を設定できないため、MCP からルーティンに 2 つ目のリポジトリを足すこともできない。
+
 **根本原因**: Anthropic は 2026-08-07 時点で、1 セッション/タスクに複数リポジトリを恒久的に紐付ける
 公式機能を提供していない（`anthropics/claude-code` issue #23627 がオープンの feature request。
 類似要望の #27934 は #23627 の重複としてクローズ済み）。
