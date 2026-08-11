@@ -179,7 +179,7 @@ fi
 #   内容（Layer 1 実行指示 + self_review_check の Warning）は PreToolUse が公式サポートする
 #   hookSpecificOutput.additionalContext で注入する（ツール結果の隣に挿入される）。
 #   exit 0（Warning のみ）のとき check_output を破棄していた旧実装の配管バグもここで解消。
-_ctx="[pre-pr-create-check] Layer 0 機械ゲート通過。PR 作成後に Layer 1 セルフレビュー（FAIR・全PR必須）を必ず実行してください。自前 code-review スキル（.claude/skills/code-review/・組み込みを置換・自律起動可）を Skill(code-review) で起動して PR 差分をレビュー。これはブロックではありません（docs/rules/ai-reviewer-strategy.md）。"
+_ctx="[pre-pr-create-check] Layer 0 機械ゲート通過。PR 作成後に Layer 1 セルフレビュー（FAIR・全PR必須）を必ず実行してください。自前 code-review スキル（.claude/skills/code-review/・組み込みを置換・自律起動可）を Skill(code-review) で起動して PR 差分をレビューし、指摘は全件 PR の行単位インラインコメントで記録してください（指摘ゼロでも event=COMMENT のレビューを1件投稿・#461）。これはブロックではありません（docs/rules/ai-reviewer-strategy.md）。"
 if printf '%s' "$check_output" | grep -q 'Warning'; then
   _ctx="${_ctx}
 セルフレビュー Warning（非ブロック・対応要否を判断すること）:

@@ -84,6 +84,13 @@ gh issue list --label "lane:claude-code-spec" --state open --json number,title,l
 5. **記録**: 対応内容を `docs/rules/claude-code-optimization.md` の「バージョン差分ログ」へ追記
    （修正 PR に含める）。同じ破壊的変更カテゴリが 2 回以上再発したら Lv3 フック昇格を検討
    （`harness-escalation.md`）
+6. 🔴 **既知化（必須・再検知ループ防止）**: クラウドセッションでは `gh`/REST が両方使えず
+   `--create-issue` の起票が失敗するため、Issue 作成が成功したかどうかに関わらず（`mcp__github__*`
+   で out-of-band に対応した場合を含む）、対応完了後に必ず
+   `python3 tools/check_claude_code_updates.py --mark-known {バージョン}` を実行し、
+   修正コミットに `config/claude_code_spec_state.json` <!-- refcheck:ignore --> の変更を含める。省略すると次回以降の
+   R-1 が同じバージョンを "BREAKING_DETECTED" として無限に再検知し、既に完了した対応を
+   繰り返し調査してしまう（実例: v2.1.225・2026-08-08・#457）。
 
 ### Step 2: 新機能・新設定の検証・検討フロー（1スロット1件）
 
@@ -107,6 +114,9 @@ gh issue list --label "lane:claude-code-spec" --state open --json number,title,l
 
 - state ファイル（`config/claude_code_spec_state.json`。初回実行時に無ければ自動生成される） <!-- refcheck:ignore -->
   の変更を **ワークフロー完了コミットに含める**（dedup の鮮度が必要なため破棄しない）
+- Step 1・Step 2 のいずれでも、対応完了バージョンに `--mark-known` が未実行なら Step 1 項目 6 の
+  手順で既知化してから state 変更をコミットする（Step 2 の検証 Issue も `--create-issue` 経由の
+  起票である点は同じで、同じ再検知ループが起こりうる）
 - 修正 PR を伴った場合は `pr-review-flow-summary.md` に従いマージまで完遂してから終了する
 
 ## ガードレール（不変）

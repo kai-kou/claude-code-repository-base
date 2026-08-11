@@ -21,7 +21,7 @@
 | Layer | 役割 | コスト | ステータス |
 |-------|------|--------|-----------|
 | **Layer 0 機械ゲート** | `self_review_check.py`（`scan_dangerous_patterns.py` 含む）/ `check_cjk_markdown.py` / lint / test | ゼロ | ✅ 全 PR 必須 |
-| **Layer 1 CCR セルフレビュー（主軸）** | **自前 `code-review` スキル（`.claude/skills/code-review/`・組み込みを置換・自律起動可）を `Skill(code-review)` で必ず実行**。観点別フレッシュ文脈ファインダー（並列サブエージェント）→ 敵対的検証 → 報告の 3 段で、差分を「第三者の PR」として読み直し自己修正盲点 64.5% を回避。指摘は PR インラインコメント or スレッド返信で記録。対話セッションの `/code-review` 手打ちも同じ自前スキルに解決される | ゼロ（サブスク枠内） | ✅ **全 PR 必須（依頼ではなく自己実行）** |
+| **Layer 1 CCR セルフレビュー（主軸）** | **自前 `code-review` スキル（`.claude/skills/code-review/`・組み込みを置換・自律起動可）を `Skill(code-review)` で必ず実行**。観点別フレッシュ文脈ファインダー（並列サブエージェント）→ 敵対的検証 → 報告の 3 段で、差分を「第三者の PR」として読み直し自己修正盲点 64.5% を回避。**指摘は必ず PR の行単位インラインコメントで記録し、指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461・振り返り可読性の担保。手順は SKILL.md Step 3-A）。対話セッションの `/code-review` 手打ちも同じ自前スキルに解決される | ゼロ（サブスク枠内） | ✅ **全 PR 必須（依頼ではなく自己実行）** |
 | **Layer 2 敵対的多観点議論** | **`discussion-review` スキル（ネイティブ Agent Teams・既定）** + `discussion_specs/code_review.json`（4 観点・敵対 rebuttal）。`tools/discussion_review_trigger.py` が要否判定と実行プラン出力（`--legacy` で旧 claude -p 経路へフォールバック） | ゼロ | ✅ 条件付き必須（diff ≥300行 または `type:security`/`type:breaking-change` ラベル時）|
 | **Layer 3 外部独立レビュー** | `anthropics/claude-code-security-review` Action / `/ultrareview` 等。**Copilot・Gemini は使わない。** 高リスク差分のみ任意で起動（手動・非ブロッキング） | 従量（高リスク時のみ） | ⚪ 任意（高リスク差分のみ・外部 AI レビュアー依頼は除く） |
 | ~~Copilot~~ | レビュー依頼を廃止（本タスク） | — | ❌ 不使用 |
@@ -62,6 +62,8 @@ Layer 2 失敗時は stderr に警告を出力し、Layer 0+1 で継続する（
 - **Layer 0（機械ゲート）+ Layer 1（セルフレビュー）の通過で即マージ可。** 外部 AI レビュアーの応答を待たない（25 分タイムアウトの待機は発生しない）。
 - Layer 1 は「依頼して待つ」ものではなく、PR 作成と同一セッションで Claude 自身が自前 `code-review` スキル（観点別フレッシュ文脈レビュー）を実行して完結させる。検出された指摘は修正コミット or スキップ理由を記録してから自動マージする。
 - 条件付きで Layer 2（敵対的議論）が必要な PR は、Layer 2 の verdict も解消してからマージする。
+- **Layer 1 の実行証跡は PR のレビューとして残っていることが前提**（#461）。インラインコメントも
+  サマリーレビューも無い PR は「Layer 1 未実施」と同じ扱いにし、マージ前に実行する。
 
 ## 関連
 

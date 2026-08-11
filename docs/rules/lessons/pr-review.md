@@ -131,3 +131,24 @@ For example, a `code-review` skill in your project's `.claude/skills/` replaces 
 `disable-model-invocation` が付与された他の組み込みスキルを自律起動しようとして同種のエラーに
 遭遇したら、まずこのフィールドの有無を疑い、恒久利用したい場合は同名 project スキルでの置換を検討する
 （対応: #275 → #280）。
+
+---
+
+## L-125: PR インラインレビュー投稿で必ず踏む GitHub API の地雷 4 件（2026-08-11・#461）
+
+**パターン**: Layer 1 セルフレビューの指摘を PR の行単位インラインコメントとして残す実装で、
+以下 4 つは仕様上ほぼ確実に踏む。SKILL.md の手順どおりに回避する
+（実装 SSOT: `.claude/skills/code-review/SKILL.md` Step 3-A）。
+
+| # | 地雷 | 症状 | 回避策 |
+|---|------|------|--------|
+| 1 | 指摘行が diff ハンク外 | `add_comment_to_pending_review` が 422（`line must be part of the diff` 相当） | `get_diff` のハンク表で事前判定 → 外れていれば `subjectType="FILE"` に切替（本文に元の `file:line` を明記）。事後の 422 も 1 回だけ FILE で再投稿 |
+| 2 | pending review の二重作成 | 前セッションが `submit_pending` 前に中断していると `create` が失敗（pending は 1 ユーザー 1 PR に 1 件） | 投稿前に `get_reviews` で自分の `state="PENDING"` を検出し `delete_pending` で破棄してから作り直す |
+| 3 | 自己 PR への `APPROVE` | PR 著者は自分の PR を承認できず必ず失敗する | `event` は常に `COMMENT`。`REQUEST_CHANGES` も dismiss/更新の method が無く自分で解除できないため使わない |
+| 4 | submit 済み review の body 編集不可 | 「あとでサマリーに追記する」設計が成立しない | サマリーは投稿時に確定させ、再レビューは新しいレビューとして投稿する |
+
+**あわせて禁止**: 既存コメントの `file:line` 照合による重複投稿スキップ。修正コミットで行番号がシフトするため、
+同じ行に生まれた **別の新規欠陥を「既出」と誤判定して握りつぶす**（L-077 の沈黙禁止と自己矛盾する）。
+重複対策は「pending 破棄」と「同一ラウンド内のバッチ dedup」に限定する。
+また、失敗した指摘の集約記録に `update_pull_request(body=...)` を使わない（全文置換で PR 説明文を破壊する）。
+`add_issue_comment` へ 1 回だけまとめて投稿する。

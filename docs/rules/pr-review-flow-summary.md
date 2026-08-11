@@ -21,7 +21,7 @@
 1. `mcp__github__create_pull_request`（`head`={作業ブランチ} / `base`=main）。本文に **`Session-Id: $CLAUDE_CODE_SESSION_ID`**・`Sprint Goal:` 1 行・`sp:N` を必ず含める（`--mine` 所有判定と done_sp 計測の前提）
 2. **PR 存在確認（必須・L-050）**: `mcp__github__list_pull_requests` で `head` を指定して実在を確認する（作成の成否をレスポンスだけで判断しない）
 3. Slack 通知: `python3 tools/slack_notify.py pr --pr-url ... --pr-title "[PR作成] ..." --branch ...`
-4. **Layer 1 セルフレビュー**: `Skill(code-review)` を必ず実行 → 指摘を PR にインライン記録 or スレッド返信
+4. **Layer 1 セルフレビュー**: `Skill(code-review)` を必ず実行 → **指摘は全件 PR の行単位インラインコメントで記録**（指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する・#461）
 5. （任意）`mcp__github__subscribe_pr_activity` + `tools/pr_review_heartbeat.sh` で CI / 人手コメントを監視
 
 > ローカル実行時は `gh pr create --head {branch} --base main -R {owner}/{repo}` でもよい。クラウドでは MCP が一次経路。
@@ -30,7 +30,7 @@
 
 | タイミング | アクション |
 |---------|-----------|
-| PR 作成直後 | Layer 1 セルフレビュー → 指摘対応（修正コミット or スキップ + 返信 + Resolve） |
+| PR 作成直後 | Layer 1 セルフレビュー → **指摘を行単位インラインコメントで投稿** → 指摘対応（修正コミット or スキップ + **同一スレッドへの返信** + Resolve） |
 | Layer 0+1 通過後 | `mcp__github__merge_pull_request`（`merge_method="squash"`）で即マージ |
 | **マージ直後** | **公開リポジトリへ反映（`publish-sync`）**。`post-merge-publish-check.sh` がドリフトを判定して指示を注入する。反映できないセッション（`add_repo` 不在・L-117）は `[publish-sync]` Issue に記録して終える（沈黙禁止・#449）→ Slack 完了通知 |
 | 任意 | CI 失敗・人手コメントがあれば対応してからマージ |
@@ -41,7 +41,8 @@
 
 ## 指摘対応ルール
 
-- **サイレント原則（L-102）**: AI レビュー指摘対応は **ユーザーに報告しない**。記録は PR スレッド返信・Resolve・Issue コメントのみ。チャット逐次報告・Slack `@mention`・完了報告アウトカムへの混入は禁止。例外は A-1〜A-6 のみ
+- **記録先は PR の行単位インラインコメント（必須・#461）**: 指摘は確度（CONFIRMED / PLAUSIBLE）を問わず全件インライン化し、対応結論は **同一スレッドへの返信** で残す（新規コメントに分離しない）。指摘ゼロでもレビューを 1 件投稿する。手順・テンプレート・フォールバックの SSOT は `.claude/skills/code-review/SKILL.md` Step 3-A
+- **サイレント原則（L-102）**: AI レビュー指摘対応は **ユーザーに報告しない**。記録は PR スレッド返信・Resolve・Issue コメントのみ（Slack `--outcome` にセルフレビュー実施・指摘件数を書くのも違反）。チャット逐次報告・Slack `@mention`・完了報告アウトカムへの混入は禁止。例外は A-1〜A-6 のみ
 - **`<github-webhook-activity>` は抑制対象ではない（#61）**: これは **ハーネスが配信する入力**（購読中は必ず履歴に出る作業キュー）であり、L-102 が禁じる「assistant のナレーション」とは別物
 - 対応した場合: 「対応しました。{修正概要}（{commit_sha}）」を返信してから Resolve
 - スキップした場合: 「スキップします。理由: {理由}」を返信してから Resolve（製品名・API 仕様は公式ドキュメントで確認してから記録する）

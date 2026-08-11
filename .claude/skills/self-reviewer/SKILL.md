@@ -76,7 +76,9 @@ git diff main...HEAD --name-only
 
 PR 作成後に **自前 `code-review` スキルを `Skill(code-review)` で必ず実行** する（Layer 1・全 PR 必須）。
 観点別ファインダー（並列サブエージェント）→ 敵対的検証 → 報告の 3 段で、差分を「第三者の PR」として
-読み直し自己修正盲点（64.5%）を回避する。指摘は PR インラインコメント or スレッド返信で記録し、
+読み直し自己修正盲点（64.5%）を回避する。**指摘は確度を問わず全件 PR の行単位インラインコメントで記録し、
+指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461。手順・本文テンプレートは
+`.claude/skills/code-review/SKILL.md` Step 3-A が SSOT）。対応結論は同一スレッドへの返信 + Resolve で残し、
 修正コミット or スキップ理由の記録で解消してから自動マージする。
 
 > `.claude/skills/code-review/` は組み込み `/code-review`（disable-model-invocation で自律起動不可）を

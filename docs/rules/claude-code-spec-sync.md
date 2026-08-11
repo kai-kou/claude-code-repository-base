@@ -47,6 +47,12 @@ tools/check_claude_code_updates.py --create-issue   ← 検知（LLM 非依存�
   L-077 プロトコル + 本レーンのキーワード辞書更新で回収する）
 - 例外: 「Fixed ...」で始まる行はバグ修正のため、明示的に "breaking" を含まない限り「その他」へ
   デモートする（"no longer" / "removed" を本文に含むだけの修正行の誤検知が多いため・2026-07-17 実測）
+- 🔴 **クラウドセッションでの既知化漏れ（実例: v2.1.225・#457）**: `gh`/REST が両方不可な環境では
+  `--create-issue` の起票が失敗し、当該バージョンの dedup キーが state から自動的に取り消される
+  （次回リトライ用の設計）。エージェントが `mcp__github__*` で Issue 対応を out-of-band に完遂しても
+  この取り消しは覆らないため、**対応完了後は必ず `--mark-known {バージョン}` を実行してから
+  state 変更をコミットする**（`.claude/skills/claude-code-spec-sync/SKILL.md` Step 1 項目 6 / Step 3）。
+  省略すると同一バージョンが以後の全 R-1 サイクルで無限に再検知される
 - 検知経路は releases.atom が一次、`raw.githubusercontent.com` の CHANGELOG.md がフォールバック
   （クラウドプロキシはスコープ外リポジトリの github.com を 403 にするが raw は通る・実測）。
   経路差による二重検知はバージョン単位 dedup キー + Issue 本文マーカーで防ぐ

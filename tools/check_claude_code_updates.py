@@ -16,8 +16,14 @@ SSOT: docs/rules/claude-code-spec-sync.md
   python3 tools/check_claude_code_updates.py --create-issue  # 新規があれば Issue 起票（定期スロット）
   python3 tools/check_claude_code_updates.py --json --dry-run  # 読み取り専用の検知確認
   python3 tools/check_claude_code_updates.py --self-test     # ネット非依存セルフテスト
+  python3 tools/check_claude_code_updates.py --mark-known 2.1.225  # 既知化のみ（ネット非依存・下記参照）
 
   ※ --json 単体は state を更新する（既知化）。検知だけ覗くときは必ず --dry-run を併用する。
+  ※ --mark-known: gh/REST が両方使えないクラウドセッションでは --create-issue が起票に失敗し、
+    当該バージョンの dedup キーが state から自動的に取り消される（次回リトライのため）。
+    エージェントが mcp__github__* で Issue 作成・対応・クローズを out-of-band に完遂させた場合は、
+    本フラグで dedup キーを直接 state へ書き戻さないと、同じバージョンが次回以降も
+    "BREAKING_DETECTED" として再検知され続ける（実例: v2.1.225・2026-08-08・#457）。
 
 終了コード:
   0  = 新バージョンを検知した（破壊的変更/新機能があれば起票済み。バグ修正のみの
@@ -310,7 +316,10 @@ def fetch_changelog_entries(repo: str, cfg: dict, ua: str, timeout: int) -> list
 
 
 def _ver_key(repo: str, version: str) -> str:
-    """検知経路（atom / changelog）が変わっても再検知しないバージョン単位の dedup キー。"""
+    """検知経路（atom / changelog）が変わっても再検知しないバージョン単位の dedup キー。
+    collect_new_releases の dedup 判定は `eid in known or vkey in known` という OR 条件のため、
+    このキー単体で検知経路（atom の eid / changelog の "changelog:repo:version"）に関わらず
+    再検知を防げる（--mark-known が経路別 eid を書かない理由）。"""
     return f"ver:{repo}:{version}"
 
 
@@ -571,6 +580,9 @@ def self_test() -> int:
     assert len(parse_changelog_releases(sample_changelog, "r", "u", 1)) == 1
     # バージョン単位 dedup キー（atom ↔ changelog の経路差を吸収）
     assert _ver_key("anthropics/claude-code", "9.9.9") == "ver:anthropics/claude-code:9.9.9"
+    # --mark-known の "v" プレフィックス正規化（extract_version と同じ規則で揃える）
+    assert extract_version("v2.1.225") == "2.1.225"
+    assert extract_version("2.1.225") == "2.1.225"
     # Issue 本文とマーカー
     rel = {"version": "9.9.9", "title": "v9.9.9", "link": "https://example.com",
            "published": "", "breaking": [{"text": lines[0], "areas": []}],
@@ -599,6 +611,10 @@ def main() -> int:
     ap.add_argument("--create-issue", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="状態ファイルを書き込まない")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--mark-known", nargs="+", metavar="VERSION",
+                     help="指定バージョンの dedup キーをネット非依存で state に直接追記し終了する"
+                          "（--create-issue が gh/REST 不可で失敗した後、エージェントが MCP で"
+                          "out-of-band に Issue 対応を完遂した際の再検知ループ止め用）")
     args = ap.parse_args()
 
     if args.self_test:
@@ -607,6 +623,27 @@ def main() -> int:
     cfg = load_config(Path(args.config))
     state_path = ROOT / cfg.get("state_file", "config/claude_code_spec_state.json")
     state = load_state(state_path)
+
+    if args.mark_known:
+        sources = (cfg.get("sources", {}) or {}).get("github_releases", [])
+        if len(sources) != 1:
+            print(f"[error] --mark-known は追跡リポジトリが1件のときのみ暗黙解決できます "
+                  f"（現在 {len(sources)}件: {sources}）。誤った repo へ既知化しないよう中止します。",
+                  file=sys.stderr)
+            return 1
+        repo = sources[0]
+        known_ids = state.setdefault("known_ids", [])
+        added = []
+        for raw_version in args.mark_known:
+            version = extract_version(raw_version)  # "v2.1.225" 表記と "2.1.225" を同一視する
+            key = _ver_key(repo, version)
+            if key not in known_ids:
+                known_ids.append(key)
+                added.append(key)
+        if not args.dry_run:
+            save_state(state_path, state, int(cfg.get("max_known_entries", 400)))
+        print(f"[info] mark-known: {len(added)}件の dedup キーを追記しました: {', '.join(added) or '(既知済み・追加なし)'}")
+        return 0
 
     releases = collect_new_releases(cfg, state)
 
