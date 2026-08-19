@@ -286,12 +286,27 @@ Claude 4 モデル全般で対応。ツール結果を受け取った後に内�
 
 ### コスト最適化の優先順位
 
-| 戦略 | 削減効果 | 適用タイミング |
-|------|---------|-------------|
-| **Haiku を使う** | 60〜80% 削減（vs Opus） | 調査・検証・チェック系タスク |
-| **Prompt Caching** | 最大 90% 削減 | 繰り返しリクエスト（キャラ設定・ルールの再注入） |
-| **Batch API** | 50% 削減 | 非同期・大量処理（theme-discovery の大量分析） |
-| **キャッシュ + バッチ + Haiku 組み合わせ** | 最大 95% 削減 | 可能な限り組み合わせる |
+> **原則: 知能天井を下げるレバーは最後に引く**（Anthropic cookbook [Cost Optimization on the Claude API](https://github.com/anthropics/claude-cookbooks/blob/main/cost_optimization/cost_optimization.ipynb) の適用順序を採用・議論記録は `content/discussions/cost-optimization-cookbook-adoption/`）。
+> キャッシュ・入力/出力トークン管理は「同じ知能で払う額」を減らすが、モデル変更と effort 低下は「できることそのもの」を減らす。前者を使い切ってから後者を検討する。
+>
+> **per-token 価格 ≠ per-task コスト**: 安いモデルがターン数・やり直しを増やせば総額は上がりうる。削減率は「1 タスクを完了するまでの総コスト」で読む（下表の削減率はすべて per-token ベースの目安）。
+
+上から順に検討する（上ほど品質を犠牲にしない）。
+
+| 順位 | 戦略 | 本リポジトリでの可否 | 削減効果 | 適用タイミング・注意 |
+|---|------|------|---------|-------------|
+| 1 | **Prompt Caching（TTL 延長）** | ⭕ `ENABLE_PROMPT_CACHING_1H=1` を `env-vars.md` で **推奨**（実際に設定されているかは環境ごとに要確認。本ベースの `.claude/settings.json` には未設定） | — | サブスクでは既定 1 時間、Usage Credits 利用中は 5 分に落ちるため本 env で 1 時間を維持する（[公式](https://code.claude.com/docs/en/costs)）。**`cache_control` を message 単位で配置する制御は API 直叩き専用で本リポジトリからは不可**（`claude-api-usage-rules.md`）。cookbook の「最大 90% 削減」は explicit breakpoint 前提の実験値であり、本リポジトリの実測ではない |
+| 2 | **コンテキストを小さく保つ** | ⭕ Hot/Warm 層階層化・CLAUDE.md 圧縮・無関係タスク間の `/clear` | — | `token-optimization-rules.md` が SSOT。長時間セッションは会話全文を毎リクエスト送るため、コンテキスト量がそのまま単価になる |
+| 3 | **verbose な出力をサブエージェントへ隔離** | ⭕ `Agent` ツール | — | テスト実行・ログ処理・大量ファイル探索は委譲し、**要約 1,000〜2,000 トークンだけ** をメインへ返す |
+| 4 | **effort を下げる** | ⭕ `/effort`・スキル frontmatter | 思考トークン相当 | モデルを変えずに思考・ツール往復を減らす |
+| 5 | **Haiku を使う（最後の手段）** | ⭕ `Agent` の `model` | 60〜80% 削減（vs Opus・per-token） | 調査・検証・チェック系で **かつ品質バーを確認できている場合のみ**。ターン数増加で相殺されうる（per-task で評価する） |
+| — | ~~**Batch API**~~ | ❌ **N/A（実行経路なし）** | ~~50% 削減~~ | `claude -p` に batch エンドポイントは無く、`anthropic` ライブラリ直叩きは禁止（`claude-api-usage-rules.md`）。非同期・非緊急処理は **ピーク帯回避スケジューリング**（`token-optimization-rules.md`「ピーク時間帯回避ルール」）で代替する |
+
+> **議論型レビュー・Agent Teams のコスト**: teammate は各自のコンテキストを持つため、プラン実行時で標準セッションの約 7 倍のトークンを使う（[公式](https://code.claude.com/docs/en/costs)）。チームは小さく保ち、teammate は sonnet を既定にし、役目が終わったら終了させる。
+
+#### 委譲先の出力トークンを抑える（早期撤退マーカー）
+
+`agent-team-summary.md` の Haiku 向けテンプレート末尾にある `<CANNOT_COMPLETE: 理由1行>` は、cookbook の stop sequence sentinel（処理不能を悟った時点で定型マーカーだけ吐かせ、生成を止める）の翻案にゃ。`stop_sequences` API パラメータは本リポジトリから使えないため、**プロンプト側の指示** として実装している。処理不能なサブエージェントが「なぜできないか」の長文を書いて出力トークンを燃やすのを防ぐのが目的で、親側はこのマーカーを見たら再委譲せず自分で原因を切り分ける。
 
 **メインセッション** :
 - デフォルトは **Sonnet 5** を使用する
