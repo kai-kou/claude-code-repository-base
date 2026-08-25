@@ -152,6 +152,25 @@ gh api graphql -f query='
 - Layer 1（観点別フレッシュ文脈セルフレビュー）を実行し、指摘を全て解消（対応 or スキップ記録）した
 - 条件付き Layer 2 が必要な PR は verdict を解消した
 
+**Layer 1 実施の機械検証（#462）**: Step 1 の実行を自己申告のまま信じず、マージ実行の直前に
+`python3 tools/check_pending_pr_reviews.py --verify-layer1 <PR番号>` を必ず通す
+（Layer 0 は PR 作成前の静的チェックで、Layer 1 の実施有無までは検出しないため別ゲートとして追加）。
+
+| 終了コード | 意味 | 挙動 |
+|---|---|---|
+| 0（`LAYER1_VERIFIED`） | レビュー本体 or 行単位インラインコメントが 1 件以上存在 | マージ続行 |
+| 1（`LAYER1_MISSING`） | 0 件（Layer 1 未実施の可能性） | **マージをブロック**。`Skill(code-review)` を実行してから再検証する |
+| 2（`LAYER1_UNKNOWN`） | gh 到達不可で判定不能（クラウドの 403 等） | この終了コード単体ではブロックしない。`mcp__github__pull_request_read(method="get_reviews")` で件数を直接確認してから判断する |
+
+> **クラウド無人セッションでは常に `LAYER1_UNKNOWN` になる**（gh 未導入が既定・L-114）。
+> この場合は必ず `mcp__github__pull_request_read(method="get_reviews")` を実行して現行コミットへの
+> レビュー/コメントが 0 件でないかを直接確認し、0 件なら `Skill(code-review)` を再実行してから
+> マージする（exit 2 を「マージしてよい」のシグナルとして扱わない）。
+>
+> `LAYER1_VERIFIED` は PR head の現行コミットに投稿されたレビュー/コメントのみをカウントする
+> （`commit_id` 一致判定）。force-push や追加コミット後に残った古いレビューは数えないため、
+> 修正コミット後は必ず Layer 1 を再実行してから本チェックを通すこと。
+
 ## Step 5: 自動マージ判定（外部レビュアー応答待ちなし）
 
 Layer 0+1（+ 条件付き Layer 2）を通過したら **即マージ可**。25 分タイムアウト待機は廃止。

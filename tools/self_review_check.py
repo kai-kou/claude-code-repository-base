@@ -174,6 +174,67 @@ def base_sync_state_reminder() -> str | None:
     )
 
 
+def rule_deletion_citation_reminder(files: list[str]) -> str | None:
+    """docs/rules/*.md の削除行を検出したら PR 本文への実ケース記載をリマインドする（Issue #469）。
+
+    削減の品質バー（token-optimization-rules.md「削減の品質バーを先に固定する」）は、ルール文書の
+    削除・降格・要約に「実際に適用されたはずの直近の実ケース」1 件以上を PR 本文へ記載することを
+    求める。self-review 実行時点では PR 本文がまだ存在しないため、ここでは削除行の有無だけを
+    機械検出してリマインドする（記載の検証ではなく Warning 一本のリマインド）。
+    """
+    rule_docs = [f for f in files if f.startswith("docs/rules/") and f.endswith(".md")]
+    if not rule_docs:
+        return None
+    base = f"origin/{default_branch()}"
+    deleted_count: dict[str, int] = {}
+    # コミット済み差分・ステージ済み・作業ツリーの 3 経路を合算する（changed_files() と同じ理由:
+    # PR 作成前のセルフレビューは未コミットの編集が大半のため、HEAD 比較だけでは見落とす）
+    for args in (
+        ["git", "diff", "--numstat", f"{base}...HEAD", "--", *rule_docs],
+        ["git", "diff", "--cached", "--numstat", "--", *rule_docs],
+        ["git", "diff", "--numstat", "--", *rule_docs],
+    ):
+        r = sh(args)
+        if r.returncode != 0:
+            continue
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            _added, removed, path = parts
+            if removed.isdigit():
+                deleted_count[path] = max(deleted_count.get(path, 0), int(removed))
+    deleted = [f"{path}(-{n})" for path, n in deleted_count.items() if n > 0]
+    if not deleted:
+        return None
+    shown = ", ".join(deleted[:10]) + ("…" if len(deleted) > 10 else "")
+    return (
+        f"docs/rules/*.md の削除行を検出しました: {shown}"
+        " → PR 本文に実ケース（Issue コメント / PR diff / セッションの行動記録を1件以上）を記載してください"
+        "（token-optimization-rules.md「削減の品質バーを先に固定する」）"
+    )
+
+
+def hot_budget_reminder(files: list[str]) -> str | None:
+    """Hot 層（`.claude/rules/` 実体・`token-optimization-rules.md`）変更時に予算超過を機械検証する（Issue #469）。"""
+    hot_dir = Path(".claude/rules")
+    hot_names = {p.name for p in hot_dir.glob("*.md")} if hot_dir.is_dir() else set()
+    touches_hot = any(
+        f == "docs/rules/token-optimization-rules.md" or Path(f).name in hot_names
+        for f in files
+    )
+    if not touches_hot:
+        return None
+    proc = sh([sys.executable, "tools/check_hot_budget.py"], timeout=20)
+    if proc.returncode == 0:
+        return None
+    lines = (proc.stdout or "").strip().splitlines()
+    bullet_lines = [l.strip("- ").strip() for l in lines if l.strip().startswith("-")]
+    # 通常は "- " 箇条書きの NG 理由行が本体。ツール異常（stdout 無し）等は stderr 全文を落とさず保持する
+    detail = "; ".join(bullet_lines) or "; ".join(lines) or (proc.stderr or "").strip() or "unknown"
+    return f"Hot 層予算チェック NG: {detail} → docs/rules/token-optimization-rules.md の増減ログを更新してください"
+
+
 def main() -> int:
     if not Path(".git").exists() and sh(["git", "rev-parse", "--git-dir"]).returncode != 0:
         return 2
@@ -239,6 +300,16 @@ def main() -> int:
     state_warn = base_sync_state_reminder()
     if state_warn:
         warnings.append(state_warn)
+
+    # docs/rules/*.md 削除行の実ケース記載リマインド（Issue #469・削減の品質バー）
+    citation_warn = rule_deletion_citation_reminder(files)
+    if citation_warn:
+        warnings.append(citation_warn)
+
+    # Hot 層予算チェック（Issue #469・実測とログの乖離・再棚卸しの合図を機械判定）
+    budget_warn = hot_budget_reminder(files)
+    if budget_warn:
+        warnings.append(budget_warn)
 
     # サブエージェント定義の `tools` がフィルタで全滅していないか（#367）
     # 全滅すると委譲が「空回答」になり、しかも Claude Code は削除をエラー報告しない。

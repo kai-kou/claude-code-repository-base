@@ -1203,6 +1203,7 @@ timeout 120 claude -p "List open issues as JSON" \
 | `security-guidance` プラグイン | [security-guidance](https://code.claude.com/docs/en/security-guidance) | 公式 Anthropic プラグイン。①編集時正規表現 ②ターン終了時 git diff レビュー ③commit/push 時 深層レビューの3層。`enabledPlugins` で有効化・`.claude/security-patterns.yaml` でカスタム可 | <!-- refcheck:ignore -->
 | `/security-review` スキル | 同上 | ブランチ全体のオンデマンドセキュリティレビュー（self-reviewer 後段の Lv2 強化候補） |
 | OTEL テレメトリ | [observability](https://code.claude.com/docs/en/agent-sdk/observability) | `CLAUDE_CODE_ENABLE_TELEMETRY=1` でコスト・ツール実行を収集（コレクター別途必要） |
+| community マーケットプレイス（`claude-community`） | [discover-plugins](https://code.claude.com/docs/en/discover-plugins) | `anthropics/claude-plugins-community` は Anthropic 管理の read-only ミラー。手動追加が必要で、永続化は `extraKnownMarketplaces` + `enabledPlugins`（v2.1.195 以降、project settings の enable だけでは外部ソースは自動インストールされない）。**本ベースへの導入は見送り**（2026-08-25・議論記録は `content/discussions/community-marketplace-eli5-20260825/`） |
 
 ### 未適用の改善提案（ユーザー判断待ち・挙動変更を伴うため未適用）
 

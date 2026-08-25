@@ -57,7 +57,7 @@ PR 作成後、指示を待たずにセルフレビュー → マージまで進
 2. Layer 1 セルフレビューを必ず実行: 自前 code-review スキルを Skill(code-review) で起動する
    （.claude/skills/code-review/ が組み込みを置換・観点別ファインダー並列 → 敵対的検証 → 報告）
    ❌ Copilot 依頼（request_copilot_review / --add-reviewer @copilot）・Gemini 依頼（/gemini review）はしない
-3. 指摘対応（修正コミット or スキップ + 返信 + Resolve）→ Layer 0+1 通過で自動マージ
+3. 指摘対応（修正コミット or スキップ + 返信 + Resolve）→ `check_pending_pr_reviews.py --verify-layer1 <PR番号>` で Layer 1 投稿済みを機械検証（#462）→ Layer 0+1 通過で自動マージ
 4. （任意）subscribe_pr_activity で CI / 人手コメントを監視
 5. セッションが切れたら → 次セッションで check_pending_pr_reviews.py --mine が自 PR を識別 → 復帰
 ```
@@ -108,7 +108,7 @@ Layer 0+1 通過後 : 即自動マージ（外部レビュアー応答待ちな�
 | 1 | Layer 1 セルフレビュー実行（自前 `code-review` スキル・`Skill(code-review)`）+ 既存レビュー状態の取得。**指摘は全件 PR の行単位インラインコメントで記録し、指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461・手順は code-review スキル Step 3-A） |
 | 2 | 指摘の分類（修正対象 / スキップ）。CI 失敗・人手コメントの有無を確認 |
 | 3 | 指摘への自動対応（修正コミット or スキップ → スレッド返信 → **Resolve 必須**） |
-| 4 | Layer 0（機械ゲート）+ Layer 1 通過の確認 |
+| 4 | Layer 0（機械ゲート）+ Layer 1 通過の確認。**`check_pending_pr_reviews.py --verify-layer1 <PR番号>` で Layer 1 投稿済みかを機械検証**（#462・挙動は reference.md Step 4） |
 | 5 | 自動マージ（squash・外部レビュアー応答待ちなし） |
 | 6 | **公開リポジトリへの反映（`publish-sync`）**。マージで生まれた差分をこのセッション内で反映まで完遂する。詳細は下記 |
 | 7 | レビュー完了サマリーを **PR スレッドのみ** に記録（サイレント・L-102） |

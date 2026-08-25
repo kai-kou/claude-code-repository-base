@@ -43,7 +43,7 @@
 
 - **記録先は PR の行単位インラインコメント（必須・#461）**: 指摘は確度（CONFIRMED / PLAUSIBLE）を問わず全件インライン化し、対応結論は **同一スレッドへの返信** で残す（新規コメントに分離しない）。指摘ゼロでもレビューを 1 件投稿する。手順・テンプレート・フォールバックの SSOT は `.claude/skills/code-review/SKILL.md` Step 3-A
 - **サイレント原則（L-102）**: AI レビュー指摘対応は **ユーザーに報告しない**。記録は PR スレッド返信・Resolve・Issue コメントのみ（Slack `--outcome` にセルフレビュー実施・指摘件数を書くのも違反）。チャット逐次報告・Slack `@mention`・完了報告アウトカムへの混入は禁止。例外は A-1〜A-6 のみ
-- **`<github-webhook-activity>` は抑制対象ではない（#61）**: これは **ハーネスが配信する入力**（購読中は必ず履歴に出る作業キュー）であり、L-102 が禁じる「assistant のナレーション」とは別物
+- **`<github-webhook-activity>` は抑制対象ではない（#61・詳細は `pr-review-flow.md`「入力とチャット出力の区別」）**: ハーネスが配信する入力であり L-102 の対象外
 - 対応した場合: 「対応しました。{修正概要}（{commit_sha}）」を返信してから Resolve
 - スキップした場合: 「スキップします。理由: {理由}」を返信してから Resolve（製品名・API 仕様は公式ドキュメントで確認してから記録する）
 
@@ -54,9 +54,6 @@ python3 tools/check_pending_pr_reviews.py --mine --actionable-only --json   # �
 python3 tools/check_pending_pr_reviews.py --actionable-only --json          # ② 他保護込みの全体ビュー（孤児 PR 救済）
 ```
 
-`needs_prompt` → Layer 1 セルフレビュー実行 → 指摘解消 → 即マージ / `needs_response` → 指摘対応（CI 失敗・人手コメント）/ `awaiting_review` → 作成セッションが実行中（待機）。
+`needs_prompt` → Layer 1 セルフレビュー実行 → 指摘解消 → 即マージ / `needs_response` → 指摘対応（CI 失敗・人手コメント）/ `awaiting_review` → 作成セッションが実行中（待機）。**自スコープ優先（#47）・他セッション対応中 PR への不介入（CP-4・L-109）** の判定ロジック全文は `pr-review-flow.md`「セッション復帰フロー」を参照。
 
 **公開反映の回収も復帰時の責務（#449）**: `python3 tools/check_publish_drift.py --quiet` が 1（ドリフトあり）/ 2（判定不能）なら、`publish-sync` スキルで反映まで完遂する。`[publish-sync]` の open Issue は「前のセッションが反映できずに残した積み残し」なので最優先で消化してクローズする。
-
-- **自スコープ優先（#47）**: `--mine` は PR 本文の `Session-Id` トレーラーで自 PR を決定論的に識別する。時間ベースの除外を受けないため、圧縮・再起動後も確実に回収できる
-- **他セッション対応中の PR には介入しない（CP-4・L-109）**: 直近 10 分以内に人間側アクティビティがある PR は `active_session: true` として `--actionable-only` から自動除外される。**出力に現れない PR には触れない**（催促・指摘対応・マージ・subscribe をしない。`--include-active` での強制取得も禁止）
