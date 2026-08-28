@@ -73,6 +73,8 @@ git log origin/main --oneline | head -3
 
 ---
 
+**G-4（#483）**: `[wip]` 自動保全コミットは履歴に残す前提のものではない。Stop フックは未コミットの差し戻し中に **1 巡だけ猶予** するので、**その 1 巡で意味のある粒度・メッセージのコミットを切る**（2 巡目以降は無条件で自動保全・L-100。猶予中も `refs/claude-wip/<session_id>` にスナップショットが残るので作業は消えない）。PR 前の書き換えは `pr-review-flow-summary.md` 項目 0（`pre-pr-create-check.sh` が機械ブロック）。仕様全文は detail 版 G-4。
+
 ## ユーザー確認前の基本手順
 
 ```bash

@@ -62,6 +62,7 @@ Claude Code のトークン消費を最小化し、セッションあたりの�
 | 日付 | 実測 | 差分 | 追加の正当化 / 相殺 |
 |---|---:|---:|---|
 | 2026-08-23 | 77,828 B | 基準 | **#469 の再棚卸し後の到達値**。前回基準（2026-08-04・68,713B）以降、増減ログに 1 行も記録されないまま実測が 79,432B（+10,719B・未記録の累積増加）まで膨張していたことが cookbook 適用検討時に発覚（`content/discussions/cost-optimization-cookbook-adoption/`）。#469 で削減対象外 3 区分（A-1〜A-6・lessons・Haiku テンプレート）を再確認のうえ残置し、代替の強制レイヤが無い長大説明のうち根拠を明示できた 2 箇所（`core-principles.md` CP-1 の境界線説明 → `core-principles-detail.md` へ、`pr-review-flow-summary.md` のセッション復帰プロセス説明 → `pr-review-flow.md` の既存詳細節への集約）を圧縮し 77,828B まで是正。増減ログをここで打ち切り、本行を新基準とする（`tools/check_hot_budget.py` で機械検証） |
+| 2026-08-28 | 79,081 B | +1,253 B | **#483（自動保全コミットの規律）**。`session-safety-rules.md` に G-4（差し戻し中の 1 巡猶予でコミットを切る・猶予分はクラッシュ時に未保全）、`pr-review-flow-summary.md` に PR 作成前の書き換え手順を追加。**削減対象外②「実観測ベースの行動規範」に該当**（`[wip]` 件名が main の直近 50 コミット中 5 件に到達済みという実測に基づく）。機械強制レイヤ（`pre-pr-create-check.sh` の件名ブロック）は **PR 作成時にしか効かず、Stop の 1 巡猶予に気づけるのは Claude 自身だけ** のため Hot に要旨が必要。仕様全文・設計経緯・却下案は `session-safety-rules-detail.md` G-4 と `content/discussions/auto_commit_message_design/` へ降格し、Hot は 2 箇所計 1,253B に圧縮した |
 
 **記載予算（基準）は ~77.8KB / ~19,500 トークン**（#469 再校正・下記ツールが機械検証する）。
 
