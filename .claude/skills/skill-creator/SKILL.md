@@ -69,6 +69,43 @@ Based on the user interview, fill in these components:
 - **compatibility**: Required tools, dependencies (optional, rarely needed)
 - **the rest of the skill :)**
 
+#### 起動経路の二択（model-invoked / user-invoked）
+
+スキルは必ずどちらかになる。既定は **model-invoked** で、本リポジトリは現在 20 スキルすべてがこれ。
+
+| | model-invoked（既定） | user-invoked（`disable-model-invocation: true`） |
+|---|---|---|
+| 起動できる主体 | 人間 + Claude 自身 + 他スキル | **人間だけ** |
+| description | 常時コンテキストに載る（毎ターン課金） | エージェントから見えない（常駐コスト 0） |
+| 代わりに払うもの | コンテキスト負荷 | 人間側の記憶負荷（どのスキルがあるか人間が索引になる） |
+
+> 🔴 **`disable-model-invocation: true` は「description を隠す」だけでなく、`Skill` ツール経由の
+> 起動そのものを塞ぐ**。他スキルの本文に「`Skill(そのスキル)` を呼べ」と書いても届かず、自律
+> パイプラインからは二度と使えなくなる。本リポジトリはこれを 2 度踏んでいる:
+> 組み込み `code-review` が `disable-model-invocation` になり自律起動できなくなった件
+> （`docs/rules/lessons/pr-review.md` L-119。同名スキルを project スコープに作り直して対処）と、
+> `deep-research` の起動経路がバージョンで移動した件（`docs/rules/lessons/skill-routing.md` L-123）。
+
+**選び方**: エージェント自身または他スキルがそのスキルへ到達する必要があるなら model-invoked。
+**手で打つときしか起動しないと確信できる場合に限り** user-invoked にして常駐コストを払わない。
+自律運用が前提の本リポジトリでは、既定（model-invoked）から動かす理由はほぼ無い。
+
+#### leading word（1 語に畳んで繰り返す）
+
+**leading word** は、モデルの事前学習に既にある圧縮された概念（*lesson* / *fog of war* / *tracer bullet*）を、
+文ではなく **語として繰り返し使う** もの。定義が分散して蓄積され、最小のトークンで振る舞いの一領域を
+固定できる。**既存語を先に探す**（造語は priors を呼べないので、既存語なら無料で手に入る定義を
+自分のトークンで書く羽目になる）。
+
+効きどころは 2 つ。本文では **実行**（その語が出るたび同じ振る舞いに手が伸びる）、description では
+**起動**（同じ語が自分のプロンプト・ドキュメント・コードベースに生きていると、その材料へ到達しやすくなる）。
+
+書き終えたら「3 箇所で言い換えている三つ組」「1 文かけて概念を指しているだけの参照」を探す。
+そこは 1 語に畳める:
+
+- 「速く・決定的で・軽い」→ *tight*（*tight* なループ）
+- 「信用できるループ」→ *red*（ループがバグで *red* になる、という二値の観測可能な状態に変わる）
+
 ### Skill Writing Guide
 
 #### Anatomy of a Skill

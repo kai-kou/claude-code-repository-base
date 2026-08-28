@@ -8,6 +8,12 @@ Hot 層（`.claude/rules/`）の実測サイズを機械チェックするツー
 「予算の増減ログ」）は「Hot 層ファイルを追加・追記する PR で 1 行足す」という **人手の運用ルール**
 だけに依存しており、守られなくても誰も気づけなかった（今回と同じ「超過が見えない」の再発）。
 
+また `.claude/rules/` だけを数えていたため、**毎ターン常駐するもう一方のコスト**が見えていなかった
+（Issue #493）。`.claude/skills/*/SKILL.md` と `.claude/commands/*.md` の frontmatter `description` は
+セッション冒頭の一覧に全件展開されるため常時コンテキストに乗るが、集計対象外だった。その結果
+「スキルを増やしても Hot 予算に影響しない」という誤った前提が実際の採否判断を歪めた。
+本ツールはこれを **参考値として併記** する（rules 側の予算判定の挙動は変えない）。
+
 本ツールは token-optimization-rules.md 自身が定義する「再棚卸しの合図」2 条件を機械判定する:
   ① 増減ログの行数が閾値（既定 4 行 = 基準 1 行 + 追加 3 行）に到達
   ② 実測が「基準」行の値を 10% 以上超過
@@ -30,6 +36,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOT_DIR = REPO_ROOT / ".claude" / "rules"
+SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+COMMANDS_DIR = REPO_ROOT / ".claude" / "commands"
 BUDGET_DOC = REPO_ROOT / "docs" / "rules" / "token-optimization-rules.md"
 
 OVERAGE_THRESHOLD = 0.10  # ②実測が基準比+10%以上
@@ -46,6 +54,56 @@ def measured_hot_bytes() -> int:
     for f in sorted(HOT_DIR.glob("*.md")):
         total += len(f.read_bytes())
     return total
+
+
+def _frontmatter_description(path: Path) -> str:
+    """`---` で囲まれた frontmatter の description 値を返す（無ければ空文字）。
+
+    description は複数行にまたがることがある（次のトップレベルキー、または frontmatter の
+    終端まで）。YAML パーサに依存せず、行頭インデントの有無だけで継続行を判定する。
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ""
+    body: list[str] = []
+    collecting = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if collecting:
+            # インデント付き、または key: を持たない行は description の継続
+            if line.startswith((" ", "\t")) or ":" not in line.split("#")[0]:
+                body.append(line.strip())
+                continue
+            break
+        if line.startswith("description:"):
+            collecting = True
+            body.append(line[len("description:"):].strip())
+    return " ".join(b for b in body if b)
+
+
+def measured_description_bytes() -> tuple[int, int]:
+    """(スキル description の合計バイト数, 対象ファイル数) を返す。
+
+    commands の description も同じ理屈で常駐するため合算する。
+    """
+    total = 0
+    count = 0
+    targets: list[Path] = []
+    if SKILLS_DIR.is_dir():
+        targets += sorted(SKILLS_DIR.glob("*/SKILL.md"))
+    if COMMANDS_DIR.is_dir():
+        targets += sorted(COMMANDS_DIR.glob("*.md"))
+    for f in targets:
+        desc = _frontmatter_description(f)
+        if desc:
+            total += len(desc.encode("utf-8"))
+            count += 1
+    return total, count
 
 
 def parse_budget_log(text: str) -> list[tuple[str, int, str]]:
@@ -92,6 +150,30 @@ def self_test() -> int:
 
     empty_rows = parse_budget_log("見出しのみで表なし\n")
     assert empty_rows == [], f"表が無いのに行を検出しました: {empty_rows}"
+
+    # frontmatter description の抽出（1 行 / 複数行 / 不在 / frontmatter なし）
+    import tempfile
+
+    def _desc(text: str) -> str:
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as fh:
+            fh.write(text)
+            tmp = Path(fh.name)
+        try:
+            return _frontmatter_description(tmp)
+        finally:
+            tmp.unlink()
+
+    got = _desc("---\nname: a\ndescription: 一行の説明\n---\n本文\n")
+    assert got == "一行の説明", f"1 行 description の抽出に失敗: {got!r}"
+
+    got = _desc("---\nname: a\ndescription: 前半\n  後半\nmodel: sonnet\n---\n")
+    assert got == "前半 後半", f"複数行 description の抽出に失敗: {got!r}"
+
+    got = _desc("---\nname: a\nmodel: sonnet\n---\n")
+    assert got == "", f"description 不在なのに値を返しました: {got!r}"
+
+    got = _desc("# frontmatter なし\ndescription: これは本文\n")
+    assert got == "", f"frontmatter が無いのに値を返しました: {got!r}"
 
     print("[hot-budget] self-test OK")
     return 0
@@ -152,6 +234,15 @@ def main() -> int:
         )
 
     out(f"[hot-budget] 実測: {actual:,}B / 基準: {baseline:,}B / ログ最新行: {latest_logged:,}B / ログ行数: {len(rows)}")
+
+    # 参考値: skills / commands の description も毎ターン常駐する（#493）。
+    # rules 側の予算判定には影響させない（閾値を設けるかは実測を見てから判断する）。
+    desc_bytes, desc_count = measured_description_bytes()
+    if desc_count:
+        out(
+            f"[hot-budget] 参考: description 常駐 {desc_bytes:,}B（{desc_count} 件）"
+            f" / rules + description 合計 {actual + desc_bytes:,}B"
+        )
 
     if triggers:
         out("[hot-budget] NG:")
