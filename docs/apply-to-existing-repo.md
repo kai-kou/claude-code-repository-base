@@ -46,7 +46,8 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 | `--overwrite-project` | off | `CLAUDE.md` / `docs/project-mission.md` も上書き（既定は保護） |
 | `--keep-settings` | off | `.claude/settings.json` を上書きしない（既定はバックアップして導入） |
 | `--check-updates` | off | 適用せず、前回適用時点からのアップデート内容だけ表示する |
-| `--dry-run` | off | コピーせず適用対象を表示するだけ |
+| `--dry-run` | off | コピーせず適用対象を表示するだけ（どのファイルがマージ・要確認になるか事前に見える） |
+| `--no-merge` | off | 3 方向マージを行わず全ファイルを無条件上書きする（旧来の挙動。マージ機構に問題が出たときの退避経路） |
 
 ---
 
@@ -54,9 +55,40 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 
 | 区分 | 挙動 |
 |------|------|
-| ルール / スキル / ハーネス / ツール（`docs/rules`・`.claude/{rules,hooks,skills,agents,output-styles,commands}`・`tools`・`scripts`・`modules.yaml`・`.mcp.json`・`.claude-plugin`） | **常に最新で上書き・更新**（再実行で同期できる） |
-| `.claude/settings.json` | ハーネス本体のため導入。既存があれば `.claude/settings.json.pre-base.bak` に退避してから上書き（`--keep-settings` で維持） |
+| ルール / スキル / ハーネス / ツール（`docs/rules`・`.claude/{rules,hooks,skills,agents,output-styles,commands}`・`tools`・`scripts`・`modules.yaml`・`.mcp.json`・`.claude-plugin`）と `.claude/settings.json` | **祖先つき 3 方向マージで同期**（下記）。ベース側が更新していないファイルには触らないため、下流の変更が消えない |
+| `.claude/settings.json` | 上と同じ経路。加えて初回のみ `.claude/settings.json.pre-base.bak` に退避する（`--keep-settings` で同期自体を止められるが、ベースのフック更新も届かなくなる） |
+| ベースに存在しないファイル（下流が独自に足したルール・スキル・ツール） | **一切触らない**（同期はベース側にあるファイルだけを対象にするため） |
 | `CLAUDE.md` / `docs/project-mission.md` | **プロジェクト固有のため既定では上書きしない**。既存があれば維持し、ベース版を `*.base` として横に配置（差分を手動で取り込む）。`--overwrite-project` で上書き |
+
+### 同期の 4 分岐（下流の変更が消えない仕組み）
+
+`.claude/base-sync-state.json` に記録した **前回適用したベースの SHA** を祖先として、ファイルごとに振り分ける。
+
+| 状況 | 挙動 |
+|------|------|
+| ベース側が前回適用から変更していない | **触らない**（下流の変更をそのまま保つ） |
+| ベース側が変更・下流は祖先のまま | ベース最新で更新する |
+| 両側が変更 | **3 方向マージ** して採用する（`tools/merge_three_way.py`） |
+| 衝突した / 検証に落ちた / 祖先が使えない | **下流のファイルを温存** し、ベース最新を `<path>.base-latest` として横に置く |
+| 前回の `.base-latest` が未解決のまま残っている | マージせず `.base-latest` をベース最新へ更新し、**毎回「要確認」として再報告** する |
+| `modules.yaml` | 専用の意味マージャ（`scripts/merge_modules_yaml.py`）が下流の `enabled` / `project:` 値を復元する（行ベースのマージには通さない） |
+
+- **衝突マーカーはワークツリーに書かれない**。マージがクリーンで、かつ検証（衝突マーカー・JSON 構文・
+  **重複キー**）を通ったときだけ採用する。壊れた `settings.json` でセッションが起動しなくなる、
+  ルールファイルがマーカー付きのまま規範として読まれる、といった事故が構造的に起きない。
+- 適用の最後に **同期サマリー**（触れず / 更新 / マージ / 要確認の件数と該当ファイル）が表示される。
+  マージしたファイルはコミット前に `git diff` で確認する。`要確認` は `diff <path> <path>.base-latest`
+  で取り込み、済んだら `.base-latest` を削除する。
+- 初回適用（マーカーなし）・ベース切替・force-push で祖先に到達できないときは、従来どおりの上書き同期に
+  自動で退避する（サマリーに「祖先: 未使用」と表示される）。
+
+### 下流独自のルールは `docs/rules/local/` に置く
+
+ベース管理下の `docs/rules/*.md` に独自節を直接足すと、ベース側が同じファイルを更新した回に
+3 方向マージか要確認扱いになり、確認の手間が残る。**独自ルールは `docs/rules/local/{同名}-local.md`
+のような新規ファイルに分離する**のが推奨（ベースに存在しないファイルは同期対象外なので常に無傷）。
+常駐させたい場合は `.claude/rules/` へ下流側で symlink する。
+既存ルールの本文そのものを書き換えたい場合だけは分離できないので、3 方向マージの衝突検出に委ねる。
 
 > **`*.base` の扱い**: `CLAUDE.md.base` は応答スタイル・PR 自律化方針・大原則参照などの雛形。
 > 既存 `CLAUDE.md` に必要な節（応答スタイル / 必読ルール表 / PR 自律化）をマージする。

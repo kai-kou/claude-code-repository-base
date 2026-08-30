@@ -24,6 +24,8 @@
 #   --overwrite-project     CLAUDE.md / docs/project-mission.md も上書きする（既定: 既存があれば保護）
 #   --keep-settings         .claude/settings.json を上書きしない（既定: バックアップしてから導入）
 #   --check-updates         適用せず、前回適用時点からのアップデート内容だけ表示する
+#   --no-merge              祖先を使った 3 方向マージを行わず、全ファイルを無条件上書きする
+#                           （旧来の挙動。マージ機構に問題が出たときの退避経路）
 #   --dry-run               実際にはコピーせず、適用対象を表示するだけ
 #   -h | --help             ヘルプ表示
 #
@@ -32,6 +34,14 @@
 #     既定では上書きしない（look before overwrite）。--overwrite-project で明示的に上書き可能。
 #   - .claude/settings.json はハーネス本体のため導入するが、既存があれば .bak に退避する。
 #   - 何度でも再実行でき、最新のルール・スキル・ハーネスへ同期できる（idempotent）。
+#   - SYNC_PATHS 配下も無条件上書きはしない。前回適用したベースの SHA
+#     （.claude/base-sync-state.json）を祖先として、ファイルごとに
+#       ① ベース側が前回から無変更 → 触らない（下流の変更をそのまま保つ）
+#       ② 下流が祖先のまま        → ベース最新で上書き（fast-forward）
+#       ③ 両側が変更              → 3 方向マージ（tools/merge_three_way.py）
+#       ④ 衝突・検証失敗・祖先なし → 下流を温存し、ベース最新を <path>.base-latest に併置
+#     と振り分ける。衝突マーカーはワークツリーに一切書かない（壊れた settings.json で
+#     下流のセッションが起動不能になる／ルールが壊れた形で読まれる、という失敗を構造的に断つ）。
 set -euo pipefail
 
 BASE_REPO="kai-kou/claude-code-repository-base"
@@ -45,6 +55,7 @@ OVERWRITE_PROJECT=false
 KEEP_SETTINGS=false
 CHECK_UPDATES=false
 DRY_RUN=false
+NO_MERGE=false
 TARGET="$(pwd)"
 
 log() { echo "[apply] $*"; }
@@ -66,6 +77,7 @@ while [ $# -gt 0 ]; do
     --keep-settings) KEEP_SETTINGS=true; shift;;
     --check-updates) CHECK_UPDATES=true; shift;;
     --dry-run) DRY_RUN=true; shift;;
+    --no-merge) NO_MERGE=true; shift;;
     -h|--help)
       sed -n '2,40p' "$0" 2>/dev/null || echo "apply-to-repo.sh: see header for usage"
       exit 0;;
@@ -358,32 +370,174 @@ if $CHECK_UPDATES; then
   exit 0
 fi
 
+
 # --- 3. 適用（対象パスの定義は 2.5 の直前を参照）---
+# --- 3.1 祖先（前回適用したベース）の解決 ---
+# show_updates() が既に必要な深掘りフェッチを済ませているので、ここでは到達性の確認だけ行う。
+# 到達できない理由（マーカー無し・ベース切替・force-push・ネットワーク不通）は
+# いずれも「祖先を使えない」という 1 つの結論に落ちるため、区別せず 2 方向コピーへ degrade する。
+PREV_SHA=""
+resolve_prev_sha() {
+  $NO_MERGE && { log "3 方向マージを無効化（--no-merge）: 全ファイルを上書きします"; return; }
+  [ -f "$STATE_FILE" ] || { log "前回適用マーカーが無いため、今回は上書き同期します（次回から下流の変更を保護します）"; return; }
+  local sha prev_base
+  sha="$(json_field "$STATE_FILE" commit)"
+  prev_base="$(json_field "$STATE_FILE" base_repo)"
+  if [ -n "$prev_base" ] && [ "$prev_base" != "$BASE_REPO" ]; then
+    log "ベースが前回と異なるため祖先を使いません（$prev_base → $BASE_REPO）: 上書き同期します"
+    return
+  fi
+  [ -n "$sha" ] || { log "マーカーに commit が無いため上書き同期します"; return; }
+  if ! have_commit "$sha"; then
+    git -C "$CLONE_DIR" fetch --deepen 500 origin >/dev/null 2>&1 || true
+  fi
+  if have_commit "$sha"; then
+    PREV_SHA="$sha"
+  else
+    log "前回適用コミット（${sha:0:7}）に到達できないため上書き同期します（下流の変更は .base-latest で保護されません）"
+  fi
+}
+if ! command -v python3 >/dev/null 2>&1; then
+  log "⚠ python3 が見つからないため 3 方向マージを無効化します（全ファイル上書き）"
+  NO_MERGE=true
+fi
+# ヘルパーはクローン側を優先する（tools/ 自体が同期対象で、適用中に差し替わるため）。
+# クローン側に無い場合（ヘルパー導入前のベースを --ref で指定した等）は対象側の既存版を使う。
+MERGE_HELPER="$CLONE_DIR/tools/merge_three_way.py"
+[ -f "$MERGE_HELPER" ] || MERGE_HELPER="$TARGET/tools/merge_three_way.py"
+
+# 適用サマリー用のカウンタと一覧（最後に必ず報告する）
+N_SKIPPED=0; N_COPIED=0; N_MERGED=0; N_CONFLICT=0; N_DELETED=0
+MERGED_LIST=""; CONFLICT_LIST=""; DELETED_LIST=""
+
+place_file() {  # $1=src $2=dst（属性を保って配置する）
+  mkdir -p "$(dirname "$2")"
+  cp -a "$1" "$2"
+}
+
+# 専用の意味マージャを持つパスは行ベースの 3 方向マージに通さない。
+# modules.yaml は merge_modules_yaml.py が「ベース最新版に下流の enabled/project 値を
+# 復元する」形で扱う。行ベースに通すと、近接した編集を衝突と判定して意味マージャなら
+# 解決できたベース更新まで取りこぼす。
+SEMANTIC_MERGE_PATHS=("modules.yaml")
+
+is_semantic_merge_path() {
+  local p
+  for p in "${SEMANTIC_MERGE_PATHS[@]}"; do
+    [ "$1" = "$p" ] && return 0
+  done
+  return 1
+}
+
+# ファイル 1 件を同期する。$1=リポジトリ相対パス
+sync_file() {
+  local rel="$1"
+  local src="$CLONE_DIR/$rel" dst="$TARGET/$rel"
+  local anc merged
+
+  # 祖先が使えない / symlink（行ベースのマージ対象外）/ 専用の意味マージャを持つパス
+  # → そのまま配置する
+  if [ -z "$PREV_SHA" ] || [ -L "$src" ] || [ -L "$dst" ] || is_semantic_merge_path "$rel"; then
+    if $DRY_RUN; then log "  ~ would place: $rel"; else place_file "$src" "$dst"; fi
+    N_COPIED=$((N_COPIED + 1))
+    return
+  fi
+
+  # 下流に無い場合、それが「ベースの新規ファイル」なのか「下流が意図的に消したもの」なのかは
+  # 祖先を見れば分かる。CLAUDE.md は不要なルール・スキルの無効化手段として削除を案内している
+  # ため、祖先に在ったものを黙って復活させない（復活させたい下流は --no-merge を使う）。
+  if [ ! -e "$dst" ]; then
+    if git -C "$CLONE_DIR" cat-file -e "$PREV_SHA:$rel" 2>/dev/null; then
+      if $DRY_RUN; then log "  ~ would keep deleted: $rel"; fi
+      N_DELETED=$((N_DELETED + 1)); DELETED_LIST="${DELETED_LIST}${rel}"$'\n'
+    else
+      if $DRY_RUN; then log "  ~ would place: $rel"; else place_file "$src" "$dst"; fi
+      N_COPIED=$((N_COPIED + 1))
+    fi
+    return
+  fi
+
+  # 前回の適用で衝突したまま取り込まれていない（.base-latest が残っている）ファイルは、
+  # 祖先（マーカーの SHA）が下流の実際の派生元とずれている。そのままマージすると
+  # 「ベース側の変更を静かに巻き戻した内容」がクリーンマージとして採用されうるので、
+  # ベース最新版で .base-latest を更新し直し、未解決として毎回報告する。
+  if [ -e "$dst.base-latest" ]; then
+    if cmp -s "$dst" "$dst.base-latest"; then
+      # 下流が取り込み済み（内容が一致）でマーカーを消し忘れただけ。外して通常フローへ戻す
+      # （消し忘れで以後ずっとベース更新が届かなくなるのを防ぐ）
+      $DRY_RUN || rm -f "$dst.base-latest"
+    else
+      if $DRY_RUN; then
+        log "  ~ would refresh unresolved: $rel.base-latest"
+      else
+        place_file "$src" "$dst.base-latest"
+      fi
+      N_CONFLICT=$((N_CONFLICT + 1)); CONFLICT_LIST="${CONFLICT_LIST}${rel}（前回からの未解決）"$'\n'
+      return
+    fi
+  fi
+
+  # ① ベース側が前回適用から変更していない → 触らない（下流の変更をそのまま保つ）
+  if git -C "$CLONE_DIR" diff --quiet "$PREV_SHA" HEAD -- "$rel" 2>/dev/null; then
+    N_SKIPPED=$((N_SKIPPED + 1))
+    return
+  fi
+
+  anc="$TMP/ancestor.blob"
+  if git -C "$CLONE_DIR" show "$PREV_SHA:$rel" > "$anc" 2>/dev/null; then
+    # ② 下流が祖先のまま → ベース最新で上書き（fast-forward）
+    if cmp -s "$anc" "$dst"; then
+      if $DRY_RUN; then log "  ~ would update: $rel"; else place_file "$src" "$dst"; fi
+      N_COPIED=$((N_COPIED + 1))
+      return
+    fi
+    # ③ 両側が変更 → 3 方向マージ（クリーン + 検証通過のときだけ採用）
+    merged="$TMP/merged.out"
+    if [ -f "$MERGE_HELPER" ] && python3 "$MERGE_HELPER" \
+        --ours "$dst" --base "$anc" --theirs "$src" --output "$merged" --path-hint "$rel" 2>/dev/null; then
+      if $DRY_RUN; then log "  ~ would merge: $rel"; else place_file "$merged" "$dst"; fi
+      N_MERGED=$((N_MERGED + 1)); MERGED_LIST="${MERGED_LIST}${rel}"$'\n'
+      return
+    fi
+  fi
+
+  # ④ 衝突・検証失敗・祖先に無い → 下流を温存し、ベース最新を併置する
+  if $DRY_RUN; then
+    log "  ~ would keep local, save base as $rel.base-latest"
+  else
+    place_file "$src" "$dst.base-latest"
+  fi
+  N_CONFLICT=$((N_CONFLICT + 1)); CONFLICT_LIST="${CONFLICT_LIST}${rel}"$'\n'
+}
+
 copy_path() {
   local rel="$1"
   local src="$CLONE_DIR/$rel"
-  local dst="$TARGET/$rel"
+  local f
+  local b_skip=$N_SKIPPED b_copy=$N_COPIED b_merge=$N_MERGED b_conf=$N_CONFLICT
   if [ ! -e "$src" ]; then
     log "  - skip（ベースに無い）: $rel"
     return
   fi
-  if $DRY_RUN; then
-    log "  ~ would sync: $rel"
-    return
-  fi
   if [ -d "$src" ]; then
-    mkdir -p "$dst"
-    cp -a "$src/." "$dst/"
+    # ディレクトリはファイル単位に展開して判定する（丸ごとコピーでは祖先比較ができない）
+    # symlink も対象にする（.claude/rules は実体がすべて symlink のため
+    # -type f だけだと丸ごと同期されなくなる）
+    while IFS= read -r -d '' f; do
+      sync_file "$rel/${f#"$src"/}"
+    done < <(find "$src" \( -type f -o -type l \) -print0)
   else
-    mkdir -p "$(dirname "$dst")"
-    cp -a "$src" "$dst"
+    sync_file "$rel"
   fi
-  log "  + $rel"
+  # 内訳を出す（一律の "+" は、全件スキップや衝突でも更新されたように読めてしまう）
+  log "  + $rel（更新 $((N_COPIED - b_copy)) / マージ $((N_MERGED - b_merge)) / 要確認 $((N_CONFLICT - b_conf)) / 触れず $((N_SKIPPED - b_skip))）"
 }
 
 log "── ルール・スキル・ハーネスを同期 ──"
-# modules.yaml は再適用のたびにベース最新版で無条件上書きされるため、事前に退避して
-# 派生側の enabled:false を復元できるようにする（Issue #196）
+resolve_prev_sha
+# modules.yaml は SEMANTIC_MERGE_PATHS として毎回ベース最新版で置き換える（行ベースの
+# 3 方向マージに通さない）。下流の enabled:false / project: 値は退避した旧版から
+# merge_modules_yaml.py で復元する（Issue #196）
 MODULES_YAML_BACKUP=""
 if [ -f "$TARGET/modules.yaml" ] && ! $DRY_RUN; then
   MODULES_YAML_BACKUP="$TMP/modules.yaml.pre-sync"
@@ -394,7 +548,9 @@ for p in "${SYNC_PATHS[@]}"; do
 done
 if [ -n "$MODULES_YAML_BACKUP" ] && [ -f "$TARGET/scripts/merge_modules_yaml.py" ]; then
   if command -v python3 >/dev/null 2>&1; then
-    python3 "$TARGET/scripts/merge_modules_yaml.py" "$MODULES_YAML_BACKUP" "$TARGET/modules.yaml"
+    # set -e 下で失敗するとマーカー更新前に中断してしまうため、失敗しても続行する
+    python3 "$TARGET/scripts/merge_modules_yaml.py" "$MODULES_YAML_BACKUP" "$TARGET/modules.yaml" \
+      || log "  ⚠ modules.yaml の設定復元に失敗しました（$MODULES_YAML_BACKUP と見比べて手動で復元してください）"
   else
     log "  ⚠ python3 が見つからないため modules.yaml の enabled 復元をスキップします（$MODULES_YAML_BACKUP と見比べて手動で復元してください）"
   fi
@@ -406,17 +562,21 @@ SETTINGS_DST="$TARGET/.claude/settings.json"
 if [ -f "$SETTINGS_SRC" ]; then
   if $KEEP_SETTINGS && [ -f "$SETTINGS_DST" ]; then
     log "  - settings.json は既存を維持（--keep-settings）"
-  elif $DRY_RUN; then
-    log "  ~ would install: .claude/settings.json"
   else
     # 既存 .bak は上書きしない（再実行でオリジナル設定のバックアップを失わないため）
-    if [ -f "$SETTINGS_DST" ] && [ ! -f "$SETTINGS_DST.pre-base.bak" ]; then
+    if [ -f "$SETTINGS_DST" ] && [ ! -f "$SETTINGS_DST.pre-base.bak" ] && ! $DRY_RUN; then
       cp -a "$SETTINGS_DST" "$SETTINGS_DST.pre-base.bak"
       log "  ! 既存 settings.json を退避: .claude/settings.json.pre-base.bak"
     fi
-    mkdir -p "$(dirname "$SETTINGS_DST")"
-    cp -a "$SETTINGS_SRC" "$SETTINGS_DST"
-    log "  + .claude/settings.json"
+    # SYNC_PATHS と同じ 4 分岐に通す（下流が足した hooks matcher・permissions・
+    # sandbox 許可ホストを、ベースの更新を取り込みつつ保持するため）
+    s_conf=$N_CONFLICT
+    sync_file ".claude/settings.json"
+    if [ "$N_CONFLICT" -gt "$s_conf" ]; then
+      log "  ! 要確認: .claude/settings.json（下流を温存・.base-latest を確認してください）"
+    else
+      log "  + .claude/settings.json"
+    fi
   fi
 fi
 
@@ -429,22 +589,45 @@ for p in "${PROTECT_PATHS[@]}"; do
     if $DRY_RUN; then
       log "  ~ would keep existing, save template as $p.base: $p"
     else
-      mkdir -p "$(dirname "$dst")"
-      cp -a "$src" "$dst.base"
+      place_file "$src" "$dst.base"
       log "  = 既存を維持・雛形を $p.base として配置: $p"
     fi
   else
     if $DRY_RUN; then
       log "  ~ would install: $p"
     else
-      mkdir -p "$(dirname "$dst")"
-      cp -a "$src" "$dst"
+      place_file "$src" "$dst"
       log "  + $p"
     fi
   fi
 done
 
+print_sync_summary() {
+  echo ""
+  log "── 同期サマリー ──"
+  if [ -n "$PREV_SHA" ]; then
+    log "  祖先: ${PREV_SHA:0:7}（前回適用したベース）"
+  else
+    log "  祖先: 未使用（上書き同期）"
+  fi
+  log "  触れず（ベース側に更新なし）: $N_SKIPPED / 配置・更新: $N_COPIED / マージ: $N_MERGED / 要確認: $N_CONFLICT / 削除を尊重: $N_DELETED"
+  if [ -n "$DELETED_LIST" ]; then
+    log "  下流で削除済みのため復活させなかったファイル（意図した無効化ならこのままで正しい）:"
+    printf '%s' "$DELETED_LIST" | while IFS= read -r x; do [ -n "$x" ] && printf '[apply]     %s\n' "$x"; done
+  fi
+  if [ -n "$MERGED_LIST" ]; then
+    log "  下流の変更を保ったままベース更新を取り込んだファイル（コミット前に diff を確認してください）:"
+    printf '%s' "$MERGED_LIST" | while IFS= read -r m; do [ -n "$m" ] && printf '[apply]     %s\n' "$m"; done
+  fi
+  if [ -n "$CONFLICT_LIST" ]; then
+    log "  ⚠ 自動反映できず、下流のファイルを温存しました（ベース最新は <path>.base-latest に併置）:"
+    printf '%s' "$CONFLICT_LIST" | while IFS= read -r c; do [ -n "$c" ] && printf '[apply]     %s\n' "$c"; done
+    log "  → diff <path> <path>.base-latest で確認し、取り込んだら .base-latest を削除してください"
+  fi
+}
+
 if $DRY_RUN; then
+  print_sync_summary
   log "DRY-RUN 完了。--dry-run を外すと実際に適用します。"
   exit 0
 fi
@@ -485,6 +668,7 @@ EOF
 fi
 
 # --- 7. 完了サマリー ---
+print_sync_summary
 echo ""
 log "✅ 適用完了: $TARGET_SLUG"
 echo "  - ルール     : docs/rules/ + .claude/rules/（symlink）"

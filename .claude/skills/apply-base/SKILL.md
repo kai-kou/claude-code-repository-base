@@ -23,7 +23,16 @@ effort: medium
 - ベースは **public**（`kai-kou/claude-code-repository-base`）の想定。取得は **git clone（`https://github.com/...`）を一次経路** にする（public のため認証不要。プロキシ/トークンが付与されていても支障はない）。
 - 🔴 **クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）では `gh api repos/.../contents`・`gh repo clone` が egress プロキシに 403 でブロックされる**（L-114・`github-mcp-fallback-patterns.md`）。よってベース取得に `gh api contents` を使わない。クラウドで生存するのは `git clone https://...` と公式 MCP（`mcp__github__get_file_contents`）のみ。
 - 適用は **冪等**。初回適用にも、ベース更新後の再同期にも同じ手順を使う。
-- 既存の `CLAUDE.md` / `docs/project-mission.md` は **既定で保護**（上書きしない）。`.claude/settings.json` は退避してから導入される。
+- 既存の `CLAUDE.md` / `docs/project-mission.md` は **既定で保護**（上書きしない）。
+- 🔴 **SYNC_PATHS 配下（`docs/rules` / `.claude/*` / `tools` / `scripts` / `.mcp.json` / `.claude/settings.json` 等）も無条件上書きしない**。
+  前回適用したベースの SHA（`.claude/base-sync-state.json`）を祖先に、ファイルごとに <!-- refcheck:ignore -->
+  「ベース側が無変更なら触らない / 下流が祖先のままなら更新 / 両側変更なら 3 方向マージ /
+  衝突・検証失敗なら下流を温存して `<path>.base-latest` を併置」と振り分ける。**衝突マーカーは
+  ワークツリーに書かれない**（`tools/merge_three_way.py` が JSON 構文・重複キーまで検証し、
+  通らなければ採用しない）。ベースに存在しないファイル（下流独自のルール・スキル）は一切触られない。
+  `modules.yaml` だけは専用の意味マージャ（`scripts/merge_modules_yaml.py`）が扱うため行ベースの
+  マージには通さない。未解決の `.base-latest` が残っているファイルは、祖先がずれるためマージせず
+  毎回「要確認」として再報告される（取り込んで `.base-latest` を消すまで消えない）。
 - これらの保護・置換・symlink 同期はベース側の適用機構が内部で行う。本スキルはそれを起動するだけ。
 
 ## 1. 事前チェック（自律実行）
@@ -56,7 +65,7 @@ rm -rf "$tmp"
 
 - `apply-to-repo.sh` 内部の `fetch_base()` も `git clone https://...` フォールバックを持つため、`--base`/`--ref` で別リポ・別 ref を指定しても取得できる（`gh repo clone` はクラウドで失敗するが git フォールバックが効く）。
 - 単一ファイルだけ確認したい等で MCP を使う場合は `mcp__github__get_file_contents(owner="kai-kou", repo="claude-code-repository-base", path="scripts/apply-to-repo.sh")` で取得できる（クラウドの 403 を回避）。`gh api repos/.../contents` は使わない。
-- 主なオプション: `--prune`（`modules.yaml` で無効化したモジュール資産を除去）/ `--tz` / `--overwrite-project`（CLAUDE.md 等も上書き）/ `--check-updates`（アップデート内容の表示のみ・適用なし）/ `--dry-run`（適用対象の確認のみ）。
+- 主なオプション: `--prune`（`modules.yaml` で無効化したモジュール資産を除去）/ `--tz` / `--overwrite-project`（CLAUDE.md 等も上書き）/ `--check-updates`（アップデート内容の表示のみ・適用なし）/ `--dry-run`（適用対象と 4 分岐の判定結果だけ表示）/ `--no-merge`（3 方向マージを行わず旧来の無条件上書きに戻す退避経路）。
 
 ## 2.5 アップデート確認（「アップデートを確認して適用して」の場合）
 
@@ -78,7 +87,28 @@ rm -rf "$tmp"
 - マーカーが無い（初回適用 or 旧版からの移行）場合は一覧表示をスキップして通常適用し、
   適用完了時にマーカーが作成される。**マーカーは次回確認の基準点なので必ずコミットに含める**。
 
-## 3. 反映後の取り込み（プロジェクト固有ファイル）
+## 3. 反映後の取り込み（同期サマリーとプロジェクト固有ファイル）
+
+### 3.0 同期サマリーの処理（必ず実施）
+
+適用の最後に「触れず / 配置・更新 / マージ / 要確認」の件数と該当ファイルが表示される。
+
+- **マージ** されたファイルは、コミット前に `git diff` を確認する（特に `hooks` や `permissions` のような
+  **並び順に意味がありうる配列** を含む変更は目視する。行としては非衝突でも意図しない順序になりうる）。
+- **要確認**（`<path>.base-latest` 併置）は `diff <path> <path>.base-latest` で取り込み、
+  済んだら `.base-latest` を削除する。**放置してコミットしない**。
+- 「祖先: 未使用（上書き同期）」と出た場合は下流の変更が保護されていない。初回適用なら正常だが、
+  2 回目以降なら `.claude/base-sync-state.json` がコミットされているかを確認する。 <!-- refcheck:ignore -->
+
+### 3.1 下流独自ルールの置き場所（`docs/rules/local/`）
+
+下流固有のルールを `docs/rules/*.md`（ベース管理下）に直接書き足すと、ベース側が同じファイルを
+更新した回にマージ確認の手間が残る。**独自ルールは `docs/rules/local/{同名}-local.md` に分離する**
+（ベースに存在しないファイルは同期対象外なので常に無傷）。常駐させたいものは下流側で
+`.claude/rules/` へ symlink する。既存ルール本文そのものの書き換えだけは分離できないので、
+3 方向マージの衝突検出に委ねる。
+
+### 3.2 プロジェクト固有ファイルの取り込み
 
 適用機構は既存のプロジェクト固有ファイルを保護し、ベース版を `*.base` として横に置く。
 
@@ -109,6 +139,8 @@ rm -rf "$tmp"
 - [ ] ユーザーがコマンドを打たずに、自然文の指示だけで適用が実行された
 - [ ] ルール（`docs/rules/` + `.claude/rules/` symlink）・スキル・ハーネス・ツールが対象リポジトリに展開された
 - [ ] 既存の `CLAUDE.md` / `docs/project-mission.md` が破壊されていない（保護 or `*.base` 併置）
+- [ ] **SYNC_PATHS 配下の下流カスタマイズが保持されている**（同期サマリーの「要確認」がゼロ、
+      または `.base-latest` を全て取り込んで削除済み。衝突マーカーがワークツリーに残っていない）
 - [ ] 再同期の場合、前回適用以降の更新内容と手動手順（base-update-notes 該当分）が確認・実施された
 - [ ] `.claude/base-sync-state.json`（同期マーカー）が更新され、コミットに含まれている <!-- refcheck:ignore -->
 - [ ] 反映差分がコミットされ、アウトカム中心の報告が出された

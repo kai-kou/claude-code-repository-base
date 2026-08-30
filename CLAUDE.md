@@ -241,4 +241,5 @@ python3 tools/check_cjk_markdown.py --changed          # 検出のみ（違反�
 - **不要なスキルを外す**: `.claude/skills/<name>/` を削除する（参照されないだけでよい）
 - **不要なフックを外す**: `.claude/settings.json` の `hooks` から該当エントリを削除する
 - **モジュール一覧**: `modules.yaml` を参照。`scripts/bootstrap.sh` で初期セットアップする
+- **下流で独自ルールを足す**: ベース管理下の `docs/rules/*.md` に直接追記せず、`docs/rules/local/{同名}-local.md` に分離する（ベースに無いファイルは適用時に触られない）。再適用時、ベース側が更新していないファイルには触れず、両側が変更したファイルは 3 方向マージされる（衝突時は下流を温存して `<path>.base-latest` を併置）
 - **既存リポジトリへ後付け適用**: 対象リポジトリのルートで `scripts/apply-to-repo.sh`（`curl ... | bash` 可）を実行する。ルール・スキル・ハーネスを展開し、プロジェクト固有ファイル（`CLAUDE.md`・`project-mission.md`）は保護する。詳細は `docs/apply-to-existing-repo.md`
