@@ -31,6 +31,31 @@
 
 ---
 
+## 2026-09-03（Issue #543）完了報告の重複出力対策 — PR 確認済みマーカーと続行ターン規律
+
+**変更内容**:
+- `.claude/settings.json` の `PostToolUse` に matcher `mcp__github__create_pull_request|mcp__github__list_pull_requests`
+  → `.claude/hooks/post-pr-confirm-mark.sh`（新規）を追加した。現在ブランチの PR 実在（作成成功・または
+  open / merged の PR を含む一覧応答）を観測してセッションローカルのマーカーを立て、`stop-pr-check.sh` の
+  クラウド分岐はマーカーがあれば「PR 存在確認をお願いします」で差し戻さない（毎ターンの差し戻しを抑止）。
+- `stop-router.sh` は差し戻し集約の末尾に `[continuation]` タグ、`stop-completion-report-check.sh` は
+  `[report-format]` タグを付け、後者は「適正な完了報告済み」セッションマーカーで以後の nudge を抑止する。
+  最終メッセージの取得は公式推奨の `last_assistant_message` を優先する。
+- `docs/rules/completion-report-rules.md` §1.2（Stop フック差し戻し後の続行ターンでは完了報告を再掲しない）を
+  新設し、`CLAUDE.md` 完了報告節と `.claude/output-styles/concise-neko.md` に 1 行ずつポインタを追加した。
+
+**下流で必要な手動手順**:
+- `.claude/settings.json` は 3 方向マージで自動反映される。衝突した場合は `.claude/settings.json.base-latest` と
+  見比べて上記 `PostToolUse` エントリを手動で追記すること。
+- `CLAUDE.md` は保護対象のため自動反映されない。「セッション完了報告」節の末尾に次の 1 行を追記すること:
+  `**\`Stop hook feedback:\` で始まる続行ターンでは完了報告を再掲しない**（確認結果を 1〜3 行。\`[report-format]\` があるときだけ簡潔に書き直す）。切り分けの正本は同ファイル §1.2（#543）。`
+  あわせてハーネス表の「事後検証」行に `post-pr-confirm-mark.sh` を足す（全 23 スクリプト）。
+- 下流で独自に `stop-pr-check.sh` を改変（例: `--mark-confirmed` フラグ）している場合は、本ベースの
+  PostToolUse 観測方式に置き換えるか、両立させるかを判断すること（マーカーのファイル名は
+  `claude-pr-confirmed-<session_id>-<branch_key>`・`lib/hook_layer1_common.sh` の `hook_branch_key()` でキー化）。
+
+---
+
 ## 2026-09-03（Issue #512）マージ前に Layer 1 セルフレビュー実施をハーネスで観測する非ブロッキング nudge を追加
 
 **変更内容**:

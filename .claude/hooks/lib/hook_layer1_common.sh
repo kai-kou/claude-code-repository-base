@@ -30,3 +30,25 @@ hook_owner_repo_match() {
 hook_extract_session_id() {
   printf '%s' "$1" | jq -r '.session_id // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_-' | cut -c1-64
 }
+
+# ブランチ名をマーカーファイル名に使える形にサニタイズする（Issue #543）
+# post-pr-confirm-mark.sh / stop-pr-check.sh の両方が同じキー化をしないと
+# マーカーの書き込み側と読み取り側でファイル名がずれて機能しなくなるため共通化する。
+# 【衝突防止】許可文字だけを残す単純フィルタは非単射で、`feat/認証` と `feat/決済` のように
+# 除去対象文字だけが異なるブランチが同じキー `feat` に潰れる（別ブランチのマーカーを流用して
+# L-103 防御が抜ける）。そのため「サニタイズ済み接頭辞 + ブランチ名全体の sha256 先頭 12 桁」を
+# キーにし、ブランチ名が違えば必ずキーも違うようにする。
+hook_branch_key() {
+  local raw="$1" prefix digest
+  prefix=$(printf '%s' "$raw" | tr -cd 'A-Za-z0-9_.-' | cut -c1-60)
+  digest=$(printf '%s' "$raw" | sha256sum 2>/dev/null | cut -c1-12)
+  [[ -n "$digest" ]] || digest=$(printf '%s' "$raw" | cksum | cut -d' ' -f1)
+  printf '%s-%s' "${prefix:-branch}" "$digest"
+}
+
+# PR 確認済みマーカーのパス（書き込み側 post-pr-confirm-mark.sh と読み取り側 stop-pr-check.sh が
+# 必ず同じ組み立てを使うよう lib に置く・#543）
+hook_pr_confirm_marker_path() {
+  local session_id="$1" branch="$2" marker_dir="$3"
+  printf '%s/claude-pr-confirmed-%s-%s' "$marker_dir" "$session_id" "$(hook_branch_key "$branch")"
+}

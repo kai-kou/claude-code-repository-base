@@ -154,3 +154,25 @@ GitHub Issue/PR からの自動トリガー型タスクにも scheduled trigger 
   （読み取り可否だけで書き込み可否を推定しない）。
 - 恒久的な複数リポジトリアクセスの公式機能がリリースされたら、本エントリとクロスリポ参照系スキルの
   前提を更新する（CP-2）。
+
+---
+
+## L-126: CCR プラットフォーム側の Stop フックがプロジェクト側と同文の差し戻しを二重に届ける
+
+**症状**: セッション終了時に「There are untracked files in the repository. Please commit and push …」が
+`[~/.claude/stop-hook-git-check.sh]` と `[$CLAUDE_PROJECT_DIR/.claude/hooks/stop-router.sh]` の **2 系統** で届く
+（本リポジトリ実測 2026-09-03・#543）。クラウド実行環境（CCR）は `~/.claude/launcher-settings.json` の
+`hooks.Stop` に **独自の git チェック**（未コミット / 未追跡 / 未 push / 未署名コミット）を登録しており、
+プロジェクト側 `stop-git-check.sh` と役割が重複する。リポジトリからは変更できない（`~/.claude/` はコンテナ側）。
+
+**含意**:
+- 差し戻しの回数・文量はプロジェクト側だけでは制御しきれない。続行ターンで完了報告を再掲しない規律
+  （`completion-report-rules.md` §1.2）が二重防御として必要な理由の 1 つ。
+- プロジェクト側 `stop-git-check.sh` を削除して一本化しない: 残留ファイル判別（origin/main と同一内容の検知・
+  重複コミット防止）はプラットフォーム側に無い。
+- `~/.claude/` には Slack 発セッション限定の `stop-hook-reply-gate.py`（`CCR_REPLY_STOP_HOOK_REASON` 設定時のみ
+  登録・Opus 系で terminal ツール未呼び出しなら最大 3 回 block）もある。Web セッションでは未登録
+  （`env | grep CCR_REPLY` が空）。Slack 発セッションで「返信していない」差し戻しが繰り返されたらこれを疑う。
+
+**判定基準**: 同趣旨の差し戻しが `~/.claude/...` と `.claude/hooks/...` の両方から届いても異常ではない。
+どちらか 1 回分だけ対応し、報告は 1〜3 行に留める（§1.2）。

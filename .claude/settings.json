@@ -136,7 +136,8 @@
     "PostToolUse": [
       { "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-validate.sh" } ] },
       { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-merge-publish-check.sh", "timeout": 90 } ] },
-      { "matcher": "mcp__github__pull_request_review_write", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-review-write-mark.sh" } ] }
+      { "matcher": "mcp__github__pull_request_review_write", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-review-write-mark.sh" } ] },
+      { "matcher": "mcp__github__create_pull_request|mcp__github__list_pull_requests", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-pr-confirm-mark.sh" } ] }
     ],
     "PostToolUseFailure": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-failure.sh" } ] }

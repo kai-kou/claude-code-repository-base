@@ -194,7 +194,8 @@ UserPromptSubmit には 3 フックを配線する（settings.json で guard →
 }
 ```
 
-- `Stop` は `agent_id` / `agent_type` を持たない（それ以外は同形）。
+- `Stop` は `agent_id` / `agent_type` を持たない（それ以外は同形）。**加えて `stop_hook_active` / `background_tasks` / `session_crons` を持つ**（公式逐語・2026-09-03 再確認・#543）: 「Stop hooks receive `stop_hook_active`, `last_assistant_message`, `background_tasks`, and `session_crons`. The `stop_hook_active` field is `true` when Claude Code is already continuing as a result of a stop hook. […] Claude Code overrides the hook and ends the turn after 8 consecutive blocks.」上の JSON 例はこれらを省いた抜粋であり、フィールドの非存在を意味しない。
+- **差し戻し（exit 2 / `decision: "block"` / `additionalContext`）は `type=user` / `isMeta=true` のメッセージとして届き、本文は `Stop hook feedback:` で始まる**（本セッション transcript で実測・#543）。複数フックがブロックするとこのブロックがフックの数だけ連続する。`stop_hook_active` が防ぐのは同一 Stop 試行の直後 1 回だけで、**メインが新しい final message を出すたびに新しい Stop 試行になり再び発火する**（「1 セッション 1 回」ではない）。続行ターンの規律は `completion-report-rules.md` §1.2。
 - **`is_error` / `result` / `exit_reason` は存在しない**。最終出力は必ず `last_assistant_message` から取る。
 - `transcript_path` は非同期書き込みで **現在ターンの最新メッセージを含まないことがある**。
   ターンの最終テキストが要るときは transcript を読まず `last_assistant_message` を使う（公式明記）。

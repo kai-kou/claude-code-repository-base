@@ -1,11 +1,95 @@
 #!/bin/bash
 # Stop hook: PR作成フロー未実行チェック
 # push済みブランチにPRがなければClaude に通知する
+#
+# 【Issue #543】クラウド（CLAUDE_CODE_REMOTE=true）ではハーネスから PR の有無を判定できず
+# （L-114）、feature ブランチ上では PR の有無に関わらず毎ターン「📋 PR 存在確認をお願いします」
+# で差し戻していた。post-pr-confirm-mark.sh が「Claude が実際に PR 存在を確認済み」を
+# PostToolUse で観測しセッションローカルのマーカーを立てるので、クラウド分岐に入る前に
+# そのマーカーの有無を確認し、あれば無条件で通す（同じ確認を毎ターン繰り返させない）。
+# マーカーはセッション + ブランチ単位でしか作られないため、他セッション・他ブランチの
+# マーカーで誤って抑止することはない（L-103 防御は維持。ローカル経路の gh api 実確認は無変更）。
 set -euo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/hook_block.sh
 source "$HOOK_DIR/lib/hook_block.sh"
+# shellcheck source=lib/hook_layer1_common.sh
+source "$HOOK_DIR/lib/hook_layer1_common.sh"
+
+# PR 確認済みマーカーのパスを組み立てる（本体・自己テスト共用の純関数）。
+# marker_dir は呼び出し側が解決した値をそのまま受け取る（本関数は git 操作をしない）。
+pr_confirm_marker_path() {
+  # 実体は lib（書き込み側 post-pr-confirm-mark.sh と同一関数を共有する）
+  hook_pr_confirm_marker_path "$1" "$2" "$3"
+}
+
+# ── 自己テスト（hook_branch_key のサニタイズ + マーカーパス組み立ての単体テスト）────────
+run_self_test() {
+  local pass=0 fail=0
+  _bk() { # $2 は期待する正規表現（ハッシュ成分は固定値で比較しない）
+    local desc="$1" want="$2" input="$3" got
+    got=$(hook_branch_key "$input")
+    if [[ "$got" =~ $want ]]; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      echo "  ✗ $desc: want=$want got=$got"
+    fi
+  }
+  _bk_distinct() {
+    local desc="$1" a="$2" b="$3" ka kb
+    ka=$(hook_branch_key "$a"); kb=$(hook_branch_key "$b")
+    if [[ "$ka" != "$kb" ]]; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      echo "  ✗ $desc: 同一キー $ka"
+    fi
+  }
+  _bk "通常のブランチ名（スラッシュ含む）はサニタイズ接頭辞 + 12 桁ハッシュになる" "^featx-[0-9a-f]{12}$" "feat/x"
+  _bk "ドット・アンダースコア・ハイフンは許可文字として残る" "^feat_x-1\.2-[0-9a-f]{12}$" "feat_x-1.2"
+  _bk "危険文字（; とスペース）は除去される" "^featxrm-rf-[0-9a-f]{12}$" 'feat/x; rm -rf'
+  _bk "許可文字ゼロのブランチ名でも空にならない" "^branch-[0-9a-f]{12}$" "認証"
+  _bk_distinct "除去対象文字だけが異なるブランチは別キーになる（衝突防止）" "feat/認証機能" "feat/決済機能"
+  _bk_distinct "スラッシュ位置だけが異なるブランチは別キーになる" "fe/atx" "feat/x"
+
+  _mp() {
+    local desc="$1" want="$2" sid="$3" branch="$4" dir="$5" got
+    got=$(pr_confirm_marker_path "$sid" "$branch" "$dir")
+    if [[ "$got" == "$want" ]]; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      echo "  ✗ $desc: want=$want got=$got"
+    fi
+  }
+  _mp "通常ケース" "/tmp/mdir/claude-pr-confirmed-sess123-$(hook_branch_key feat/x)" "sess123" "feat/x" "/tmp/mdir"
+  _mp "session_id と branch が異なればパスも異なる" "/tmp/mdir/claude-pr-confirmed-sessB-$(hook_branch_key other/branch)" "sessB" "other/branch" "/tmp/mdir"
+
+  # マーカーの往復テスト（実 git dir を汚さない一時ディレクトリで実施）
+  local tmp_dir marker
+  tmp_dir=$(mktemp -d 2>/dev/null || echo "")
+  if [[ -n "$tmp_dir" ]]; then
+    marker=$(pr_confirm_marker_path "sessX" "feat/y" "$tmp_dir")
+    [[ ! -f "$marker" ]] \
+      && pass=$((pass + 1)) \
+      || { fail=$((fail + 1)); echo "  ✗ マーカー未作成時点で存在してしまっている"; }
+    : > "$marker"
+    [[ -f "$marker" ]] \
+      && pass=$((pass + 1)) \
+      || { fail=$((fail + 1)); echo "  ✗ マーカー touch 後にファイルが見つからない"; }
+    rm -rf "$tmp_dir"
+  fi
+
+  echo "[stop-pr-check --self-test] PASS=$pass FAIL=$fail"
+  [[ "$fail" -eq 0 ]]
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  run_self_test
+  exit $?
+fi
 
 input=$(cat)
 
@@ -15,6 +99,8 @@ if [[ "$stop_hook_active" == "true" ]]; then exit 0; fi
 
 # git リポジトリでなければスキップ
 if ! git rev-parse --git-dir >/dev/null 2>&1; then exit 0; fi
+# マーカーの読み書きは post-pr-confirm-mark.sh と同じ基準ディレクトリで解決する（他フックと同じ防御）
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 0
 
 current_branch=$(git branch --show-current)
 
@@ -93,7 +179,20 @@ if [[ "$branch_check_status" == "not_found" ]]; then exit 0; fi
 # クラウドではフックから MCP を呼べず、gh も未導入・repo スコープ REST も 403 のため、
 # ハーネス側で PR の有無を判定する手段が存在しない。これは障害ではなく既定の運用なので、
 # 「確認できません」という異常表現ではなく Claude への実行指示として渡す。
+#
+# 【Issue #543】その差し戻しに入る前に「このセッション + このブランチで PR 存在確認済み」
+# マーカー（post-pr-confirm-mark.sh が立てる）を確認する。あれば毎ターン同じ確認を
+# 求めず無条件で通す。マーカーが無い（=未確認 or 別セッション/別ブランチ）場合のみ
+# 従来どおり差し戻す。
 if [[ "${CLAUDE_CODE_REMOTE:-}" == "true" ]]; then
+  pr_confirm_session_id=$(hook_extract_session_id "$input" || echo "")
+  if [[ -n "$pr_confirm_session_id" ]]; then
+    pr_confirm_marker_dir="${CLAUDE_HOOK_PR_MARKER_DIR:-$(git rev-parse --git-dir 2>/dev/null || echo "")}"
+    if [[ -n "$pr_confirm_marker_dir" ]]; then
+      pr_confirm_marker=$(pr_confirm_marker_path "$pr_confirm_session_id" "$current_branch" "$pr_confirm_marker_dir")
+      [[ -f "$pr_confirm_marker" ]] && exit 0
+    fi
+  fi
   hook_block "📋 PR 存在確認をお願いします（クラウドではハーネスから判定できない仕様。gh の導入では解決しません）: ${VERIFY_HINT}
 - PR が既にある場合: 確認結果（PR 番号・state）を踏まえてそのまま終了してよい
 - PR が無い場合: pr-review-flow.md に従いセルフレビュー → PR 作成まで進める"

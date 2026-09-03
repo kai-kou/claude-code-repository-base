@@ -70,6 +70,7 @@ modules:
       - pre-tool-use-router.sh
       - pre-git-push-check.sh
       - pre-pr-create-check.sh
+      - post-pr-confirm-mark.sh   # PR 存在確認済みマーカー（stop-pr-check.sh の毎ターン差し戻しを抑止・#543）
       - post-tool-use-failure.sh
       - post-tool-use-validate.sh
     skills:
@@ -80,6 +81,7 @@ modules:
       - check_pending_pr_reviews.py
       - poll_pr_reviews.sh
       - pr_review_heartbeat.sh
+      - test_pr_confirm_marker.sh   # post-pr-confirm-mark.sh × stop-pr-check.sh の e2e（#543）
       - self_review_check.py
       - detect_pr_diff_type.py
       - analyze_pr_review_comments.py

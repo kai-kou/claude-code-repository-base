@@ -116,6 +116,17 @@ run_hook "stop-completion-report-check.sh"
 # 5. 公開リポジトリ（kai-kou/claude-code-repository-base）のドリフト検知（Issue #381）
 run_hook "stop-publish-check.sh"
 
+# 【Issue #543】Stop フックが差し戻した（FINAL_EXIT=2）続行ターンでは、直前の完了報告
+# フォーマット（テンプレート全体）をそのまま再掲せず、求められた確認・追加対応の結果だけを
+# 返すべきという続行ターン規律（completion-report-rules.md §1.2）へのポインタを 1 回だけ付記する。
+# 判定基準（[report-format] の有無で書き直すか等）はここに書かない: SSOT は §1.2 であり、
+# ここに分岐説明を埋め込むとルール改訂時に文言がズレる（議論 round 3 の裁定・#543）。
+# サブフックが複数ブロックしても MSG_FILE への追記は 1 度（この if ブロック自体が 1 回しか
+# 通らないため自然に満たされる）。
+if [[ "$FINAL_EXIT" -eq 2 ]] && [[ -s "$MSG_FILE" ]]; then
+  printf '\n\n---\n\n[continuation] これは Stop フックの差し戻しです。続行ターンでは直前の完了報告を再掲しない（SSOT: docs/rules/completion-report-rules.md §1.2）\n' >> "$MSG_FILE"
+fi
+
 # 収集したメッセージを単一の stderr 出力として出す（L-050: 複数メッセージ問題を修正）。
 # 公式仕様: exit 2 時は stdout の JSON が無視されるため stderr に統一する（Issue #142）。
 if [[ -s "$MSG_FILE" ]]; then
