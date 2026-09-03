@@ -199,7 +199,10 @@ SYNC_PATHS=(
   ".claude/agents"
   ".claude/output-styles"
   ".claude/commands"
-  ".claude-plugin"
+  # .claude-plugin/ はディレクトリ丸ごとにしない。marketplace.json（本ベースを配布するための
+  # マーケットプレイス定義）を下流へ配ると、下流リポジトリが「claude-code-base を配布する
+  # マーケットプレイス」を名乗ってしまう。下流に要るのは plugin.json の雛形だけ。
+  ".claude-plugin/plugin.json"
   "tools"
   "scripts"
   "modules.yaml"
@@ -222,6 +225,14 @@ PROTECT_PATHS=(
   "config/data_only_path_prefixes.txt"
   "config/pr_review_comment_categories.json"
 )
+# かつて配布していたが、いまは配布しないパス（1 回限りの移行削除）。
+# SYNC_PATHS から外しただけでは、過去の適用で下流へ渡ったファイルが永久に残る。
+# 例: .claude-plugin/marketplace.json は「本ベースを配布するマーケットプレイス定義」であり、
+# 下流に残ると下流リポジトリが claude-code-base を配布するマーケットプレイスを名乗ってしまう。
+REMOVE_PATHS=(
+  ".claude-plugin/marketplace.json"
+)
+
 # 意図的に配布しない config/: config/backlog_refinement_state.json（実行状態そのもの。
 # 配ると新規下流に著者環境の last_refinement_at が初期値として入り、週次ゲートが
 # 初回から誤って「実行済み」と判定する。読み手は不在時に「未実行」として初回に自動生成する）
@@ -531,6 +542,14 @@ resolve_prev_sha
 # ベースが変更した場合も 3 方向マージが下流の変更行をそのまま保持する（Issue #509）。
 for p in "${SYNC_PATHS[@]}"; do
   copy_path "$p"
+done
+
+# 配布をやめたパスの回収（過去の適用で下流へ渡ったものを消す）
+for p in "${REMOVE_PATHS[@]}"; do
+  if [ -e "$TARGET/$p" ]; then
+    rm -rf "$TARGET/$p"
+    log "  - $p を削除（ベースが配布対象から外したため）"
+  fi
 done
 
 # --- 4. .claude/settings.json（ハーネス本体）の導入 ---

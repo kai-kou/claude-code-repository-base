@@ -223,7 +223,7 @@ memory: user   # user | project | local
   `disallowedTools` / `model` / `permissionMode` / `mcpServers` / `hooks` / `maxTurns` / `skills` /
   `initialPrompt` / `memory` / `effort` / `background` / `isolation` / `color`
 - **Plugin 経由のサブエージェントは `hooks` / `mcpServers` / `permissionMode` が無視される**
-  （`.claude-plugin/plugin.json` で配布する owner.md は `tools` のみ使用のため影響なし）
+  （`.claude-plugin/plugin.json` はサブエージェントを配布しない（`skills` のみ宣言）ため影響なし・#538）
 
 ## 6. 参照
 

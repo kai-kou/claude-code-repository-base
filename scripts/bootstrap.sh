@@ -3,8 +3,9 @@
 #
 # 役割:
 #   1. プレースホルダ置換（__OWNER__/__REPO__, {{REPO_SLUG}}, {{PROJECT_NAME}} 等）
-#   2. .claude/rules/ の symlink を同期（check_rules_sync.sh --fix）
-#   3. （任意）modules.yaml で enabled:false のモジュールを除去（--prune）
+#   2. ベース固有の配布物（.claude-plugin/marketplace.json）を除去
+#   3. .claude/rules/ の symlink を同期（check_rules_sync.sh --fix）
+#   4. （任意）modules.yaml で enabled:false のモジュールを除去（--prune）
 #
 # 使い方:
 #   bash scripts/bootstrap.sh --repo owner/repo --name "My Project" [--desc "説明"] [--tz Asia/Tokyo] [--prune]
@@ -68,6 +69,15 @@ for f in "${FILES[@]}"; do
     "$f" 2>/dev/null || true
 done
 echo "[bootstrap] placeholders replaced in ${#FILES[@]} files"
+
+# --- 1.5 ベース固有の配布物を除去 ---
+# .claude-plugin/marketplace.json は「本ベースを配布するマーケットプレイス定義」であり、
+# clone した新規プロジェクトが持つと、そのプロジェクトが claude-code-base を配布する
+# マーケットプレイスを名乗ってしまう（プレースホルダ置換では直らない）。
+if [ -f "$ROOT/.claude-plugin/marketplace.json" ]; then
+  rm -f "$ROOT/.claude-plugin/marketplace.json"
+  echo "[bootstrap] removed .claude-plugin/marketplace.json (base-only distribution manifest)"
+fi
 
 # --- 2. ルール symlink 同期 ---
 if [ -x "$ROOT/tools/check_rules_sync.sh" ]; then

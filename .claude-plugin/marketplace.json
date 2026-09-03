@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "kai-kou-claude-base",
+  "description": "kai-kou の Claude Code 自律運用ベースを配布するマーケットプレイス。",
+  "owner": {
+    "name": "kai-kou",
+    "url": "https://github.com/kai-kou"
+  },
+  "plugins": [
+    {
+      "name": "claude-code-base",
+      "source": "./",
+      "description": "汎用 Claude Code 自律運用ベースのインストーラ。apply-base スキルが対象リポジトリへルール・フック・ツール一式を展開する。MCP サーバ定義（context7 / github）も同梱する。",
+      "homepage": "https://github.com/kai-kou/claude-code-repository-base",
+      "license": "MIT",
+      "keywords": ["claude-code", "autonomous", "harness", "template", "base"]
+    }
+  ]
+}

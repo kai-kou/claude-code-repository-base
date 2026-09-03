@@ -54,6 +54,22 @@ curl -fsSL https://raw.githubusercontent.com/kai-kou/claude-code-repository-base
 オプション（`--prune` / `--tz` / `--ref` / `--dry-run` / `--check-updates` 等）は
 [`docs/apply-to-existing-repo.md`](docs/apply-to-existing-repo.md) を参照。
 
+### C. プラグインとして導入する
+
+Claude Code のプラグイン機構から導入する経路。**配布されるのはセットアップ用スキル `apply-base` と
+`.mcp.json` の MCP サーバ定義（`context7` / `github`）だけ** で、ルール・フック本体はインストール後に
+`apply-base` が対象リポジトリへ展開する。
+
+```bash
+claude plugin marketplace add kai-kou/claude-code-repository-base
+claude plugin install claude-code-base@kai-kou-claude-base
+```
+
+インストール後、Claude に「claude-code-base を反映して」と伝えると本体が展開される。
+**プラグインを入れただけでは 🔒 のガードレールも 📋 の常駐ルールも有効にならない。**
+何が配れて何が配れないかは「[Plugin / MCP として使う](#plugin--mcp-として使う)」が正本。
+手数を減らしたいだけなら B が早い。
+
 ## ユーザー確認が必要なのはこの 6 つ
 
 「確認を挟まず進める」と言っても、人間の判断を残す境界がある。`docs/rules/user-confirmation-minimization.md` が
@@ -167,23 +183,51 @@ append-only のノート**）から、前回適用日以降のエントリが自
 
 ### Plugin / MCP として使う
 
-clone / テンプレート利用に加え、**Claude Code Plugin** としても読み込める。
+clone / テンプレート利用に加え、**Claude Code Plugin** としても読み込める。ただし配布されるのは
+**セットアップ用スキル `apply-base` と `.mcp.json` の MCP サーバ定義だけ** であることに注意する（理由は下記）。
 
-- `.claude-plugin/plugin.json`: Plugin マニフェスト（メタデータ + `skills` / `agents` のパス宣言）
+`claude plugin details claude-code-base@kai-kou-claude-base` で実際に確認できる内訳（実測）:
+
+```
+Component inventory
+  Skills (1)  apply-base
+  Agents (0)
+  Hooks (0)
+  MCP servers (2)  context7, github
+```
+
+`.mcp.json` はプラグイン root の既定コンポーネント配置に含まれるため、**インストールすると
+`context7` / `github` の MCP サーバ定義が自動で登録される**（`plugin.json` の `mcpServers` を空にしても
+抑止できないことを実測で確認済み）。不要なら `/plugin` からプラグインを無効化する。
+サブエージェント定義（`owner.md`）は、判断基準である `docs/rules/session-sprint-rules.md` が
+プラグインでは配れず単体で機能しないため、**意図的に配布対象から外している**。
+
+- `.claude-plugin/marketplace.json`: マーケットプレイス定義（自己参照・`source: "./"`）
+- `.claude-plugin/plugin.json`: Plugin マニフェスト（メタデータ + `skills` のパス宣言）
 - `.mcp.json`: プロジェクトスコープの MCP サーバ定義（`context7` / `github`）。環境変数は `${VAR:-default}` 展開で、未設定でも config 解析が壊れない
 
 ```bash
+claude plugin marketplace add kai-kou/claude-code-repository-base
+claude plugin install claude-code-base@kai-kou-claude-base
+# インストール後、Claude に「claude-code-base を反映して」と伝えると apply-base が本体を展開する
+
 export GH_TOKEN=ghp_xxx              # github MCP（既定 https://api.githubcopilot.com/mcp/）
 export CONTEXT7_API_KEY=ctx_xxx      # context7（任意・未設定でも匿名で動作）
-
-claude plugin marketplace add kai-kou/claude-code-repository-base
-claude plugin install claude-code-base
-claude plugin validate .
 ```
 
-> **注意** （フックの扱い）: 本ベースのフック（`main` 直 push ブロック等）は `.claude/settings.json` に登録されており、
-> **clone / テンプレート利用では自動で有効** になる。Plugin インストール経由でのフック配布（`hooks/hooks.json` 形式）は
-> 未対応のため、ガードレールが必要な場合は clone 利用を推奨する。
+> 🔴 **プラグイン単体では 🔒 も 📋 も有効にならない**。Claude Code のプラグイン機構には次の制約があり、
+> 本ベースの価値の中核は **プラグインとしては配れない**（公式仕様・実測で確認済み）:
+>
+> | 配れないもの | 理由 | 影響 |
+> |---|---|---|
+> | `CLAUDE.md` のプロジェクトコンテキスト | プラグイン root の `CLAUDE.md` は読み込まれない（公式明記） | 運用規約が届かない |
+> | `.claude/rules/` の毎セッション常駐 | プラグインに rules というコンポーネント種別が無い | 📋 の常駐ルールが効かない |
+> | `settings.json` の `permissions` / `sandbox` / `env` | プラグインが配れるのは `agent` と `subagentStatusLine` の 2 キーのみ | `.env`・秘密鍵のアクセスブロックが効かない |
+>
+> このためプラグインは **インストーラとして設計** してある。`/plugin install` 後に Claude へ
+> 「claude-code-base を反映して」と伝えると `apply-base` が対象リポジトリへルール・フック・ツール一式を
+> 展開し、そこで初めて 🔒 のガードレール（`main` 直 push ブロック等）と 📋 の常駐ルールが有効になる。
+> ガードレールがすぐ必要なら、プラグインを経由せず「クイックスタート B」の 1 コマンドで導入するのが早い。
 
 ## エージェント向け入口
 

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "claude-code-base",
-  "description": "汎用 Claude Code 自律運用ベース（ルール・スキル・エージェント・フック・MCP のテンプレート）。Human-on-the-loop で実装→PR→AI レビュー→自動マージまで自律実行する土台。",
-  "version": "0.1.0",
+  "description": "汎用 Claude Code 自律運用ベースのインストーラ。配布物はセットアップ用スキル apply-base と .mcp.json の MCP サーバ定義（context7 / github）で、ルール・フック・ツール一式は apply-base の実行時に対象リポジトリへ展開される。プラグインを入れただけではガードレール（main 直 push ブロック等）と常駐ルールは有効にならない。",
   "author": {
     "name": "kai-kou",
     "url": "https://github.com/kai-kou"
   },
+  "license": "MIT",
   "homepage": "https://github.com/kai-kou/claude-code-repository-base",
   "repository": "https://github.com/kai-kou/claude-code-repository-base",
   "keywords": [
@@ -17,6 +17,5 @@
     "base",
     "agent-teams"
   ],
-  "skills": "./.claude/skills/",
-  "agents": ["./.claude/agents/owner.md"]
+  "skills": ["./.claude/skills/apply-base/"]
 }

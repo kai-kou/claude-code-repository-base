@@ -636,3 +636,22 @@
   既に指示しているため（`The requested scope is the deliverable` / `Write code that reads like the surrounding code`）、
   重ねて書くと矛盾解決コストだけが増える。**本体が言っていないプロジェクト固有の禁止事項**
   （`main` 直 push・L-077・Intent Gate・L-113・`settings.local.json` の env 禁止）は残すこと
+
+## 2026-09-03（Issue #537 / #538）プラグイン配布経路の追加と `.claude-plugin/` 配布境界の変更
+
+- **変更内容**: ① `.claude-plugin/marketplace.json` を新規追加し、公開リポジトリを Claude Code の
+  プラグインマーケットプレイスとして機能させた（`claude plugin marketplace add kai-kou/claude-code-repository-base`）。
+  ② `.claude-plugin/plugin.json` から `version` を削除（設定するとその文字列に pin され、bump するまで
+  利用者に更新が届かない。省略すると git ソースの解決コミット SHA が版になる）。`skills` を `apply-base` に絞り、
+  `agents` の宣言を廃止した（`owner.md` は判断基準の `session-sprint-rules.md` がプラグインでは配れず単体で機能しないため）。
+  ③ `scripts/apply-to-repo.sh` の `SYNC_PATHS` を `.claude-plugin`（ディレクトリ）から `.claude-plugin/plugin.json`
+  （単一ファイル）へ狭め、`REMOVE_PATHS` による 1 回限りの移行削除を追加した。
+  ④ `scripts/bootstrap.sh` が clone 後に `.claude-plugin/marketplace.json` を削除するようにした。
+- **下流で必要な手動手順**: ① **`.claude-plugin/marketplace.json` が自リポジトリに存在する場合は削除する**。
+  これは「claude-code-base を配布するマーケットプレイス定義」であり、下流に残ると自リポジトリが
+  claude-code-base の配布元を名乗ってしまう。**`apply-to-repo.sh` を再実行すれば `REMOVE_PATHS` が自動削除する**
+  ため、通常は手動作業は不要（削除された場合は `- .claude-plugin/marketplace.json を削除` とログに出る）。
+  ② 自リポジトリの `.claude-plugin/plugin.json` をプラグインとして配布している下流は、`version` フィールドの
+  扱いを見直す（設定したまま bump しないと更新が届かない）。
+  ③ 自リポジトリ独自に `.claude-plugin/` 配下へファイルを追加していた下流は、それが `SYNC_PATHS` の
+  対象外になった（`plugin.json` のみ同期）ことを踏まえ、必要なら自リポジトリ側で管理する。

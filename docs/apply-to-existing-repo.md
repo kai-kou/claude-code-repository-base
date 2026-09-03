@@ -26,7 +26,19 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 - **スキル定義**: `.claude/skills/`
 - **ハーネス**: `.claude/hooks/` + `.claude/settings.json`（フック登録）
 - **エージェント / コマンド**: `.claude/agents/` / `.claude/commands/`
-- **ツール / 補助**: `tools/` / `scripts/` / `modules.yaml` / `.mcp.json` / `.claude-plugin/`
+- **ツール / 補助**: `tools/` / `scripts/` / `modules.yaml` / `.mcp.json` / `.claude-plugin/plugin.json`
+
+> **`.claude-plugin/` はディレクトリ丸ごとではなく `plugin.json` だけを配る**。
+> `marketplace.json`（本ベースを配布するためのマーケットプレイス定義）は公開リポジトリでのみ意味を持ち、
+> 下流へ配ると下流リポジトリが「claude-code-base を配布するマーケットプレイス」を名乗ってしまうため除外している。
+
+> **プラグイン経由で導入したい場合**: `claude plugin marketplace add kai-kou/claude-code-repository-base` →
+> `claude plugin install claude-code-base@kai-kou-claude-base` でセットアップ用スキル `apply-base` と
+> `.mcp.json` の MCP サーバ定義（`context7` / `github`）が入る。
+> ただし **ルール常駐・フック・`permissions` は Claude Code のプラグイン機構では配布できない**（公式仕様）。
+> インストール後に `apply-base` を起動して初めて本ドキュメントの展開内容が対象リポジトリに入る。
+> 詳細は [README「Plugin / MCP として使う」](../README.md#plugin--mcp-として使う)が正本。
+> ワンコマンドで済ませたいなら上の TL;DR が早い。
 
 対象リポジトリの slug は `git remote origin` から自動判定し、プレースホルダ（`__OWNER__/__REPO__` 等）を置換する。
 
@@ -55,7 +67,7 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 
 | 区分 | 挙動 |
 |------|------|
-| ルール / スキル / ハーネス / ツール（`docs/rules`・`.claude/{rules,hooks,skills,agents,output-styles,commands}`・`tools`・`scripts`・`modules.yaml`・`.mcp.json`・`.claude-plugin`）と `.claude/settings.json` | **祖先つき 3 方向マージで同期**（下記）。ベース側が更新していないファイルには触らないため、下流の変更が消えない |
+| ルール / スキル / ハーネス / ツール（`docs/rules`・`.claude/{rules,hooks,skills,agents,output-styles,commands}`・`tools`・`scripts`・`modules.yaml`・`.mcp.json`・`.claude-plugin/plugin.json`）と `.claude/settings.json` | **祖先つき 3 方向マージで同期**（下記）。ベース側が更新していないファイルには触らないため、下流の変更が消えない |
 | `.claude/settings.json` | 上と同じ経路。加えて初回のみ `.claude/settings.json.pre-base.bak` に退避する（`--keep-settings` で同期自体を止められるが、ベースのフック更新も届かなくなる） |
 | ベースに存在しないファイル（下流が独自に足したルール・スキル・ツール） | **一切触らない**（同期はベース側にあるファイルだけを対象にするため） |
 | `CLAUDE.md` / `docs/project-mission.md` | **プロジェクト固有のため既定では上書きしない**。既存があれば維持し、ベース版を `*.base` として横に配置（差分を手動で取り込む）。`--overwrite-project` で上書き |
