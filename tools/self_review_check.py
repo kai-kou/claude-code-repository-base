@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 MAX_MB = float(os.environ.get("SELF_REVIEW_MAX_MB", "5"))
@@ -235,6 +236,85 @@ def hot_budget_reminder(files: list[str]) -> str | None:
     return f"Hot 層予算チェック NG: {detail} → docs/rules/token-optimization-rules.md の増減ログを更新してください"
 
 
+# pre-pr-create-check.sh は self_review_check.py プロセス全体を外側 timeout 60 秒で包む。
+# ツール単体に近い秒数を許すと合計が外側予算を超え、timeout コマンドが exit=124 で
+# プロセスごと強制終了する（フックは check_exit==1 のときしか hook_block しないため、
+# 124 は「チェッカー自体の異常」扱いで PR 作成が無警告に通ってしまう）。
+SELF_TEST_PER_TOOL_TIMEOUT = 15
+SELF_TEST_BUDGET_SECONDS = 40
+
+
+def self_test_errors(files: list[str]) -> list[str]:
+    """差分に含まれる --self-test 対応ツールを実行し、失敗を Error として返す（Issue #508）。
+
+    対象判定はソース内の "--self-test" 文字列の有無で機械的に拾う（ハードコードの
+    許可リストを持たないため、新設ツールが自動的に対象へ加わる）。差分に該当ツールが
+    無ければ何も実行しない（既存 PR の所要時間を増やさない）。
+
+    本ファイル自身はこの docstring 内にも "--self-test" 文字列を含むため、対象判定に
+    そのまま乗せると自分自身をサブプロセスとして再帰起動し無限にハングする。ファイル
+    パスで自己除外する。
+
+    対象はさらに、解決後の実パスが tools/ または scripts/ の実体配下にあるものに限定する
+    （シンボリックリンク経由でリポジトリ外の任意ファイルを実行させない）。
+    """
+    errs: list[str] = []
+    repo_root = Path(".").resolve()
+    self_path = Path(__file__).resolve()
+    allowed_dirs = (repo_root / "tools", repo_root / "scripts")
+
+    def _is_allowed(path: Path) -> bool:
+        for d in allowed_dirs:
+            try:
+                if path.is_relative_to(d):
+                    return True
+            except AttributeError:  # pragma: no cover - Python 3.8 互換フォールバック
+                try:
+                    path.relative_to(d)
+                    return True
+                except ValueError:
+                    pass
+        return False
+
+    targets = [
+        f for f in files
+        if (f.startswith("tools/") or f.startswith("scripts/")) and f.endswith(".py")
+        and Path(f).resolve() != self_path
+        and _is_allowed(Path(f).resolve())
+    ]
+
+    started = time.monotonic()
+    for f in targets:
+        elapsed = time.monotonic() - started
+        if elapsed > SELF_TEST_BUDGET_SECONDS:
+            errs.append(
+                f"--self-test 未実行: {f}（PR 前ゲートの実行時間予算 {SELF_TEST_BUDGET_SECONDS}秒を"
+                f"超過。ローカルで `python3 {f} --self-test` を確認してから再度 PR 作成してください）"
+            )
+            continue
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if "--self-test" not in text:
+            continue
+        remaining = max(1, int(SELF_TEST_BUDGET_SECONDS - elapsed))
+        per_call_timeout = min(SELF_TEST_PER_TOOL_TIMEOUT, remaining)
+        try:
+            proc = sh([sys.executable, f, "--self-test"], timeout=per_call_timeout)
+        except subprocess.TimeoutExpired:
+            errs.append(f"--self-test タイムアウト: {f}（{per_call_timeout}秒超）")
+            continue
+        except Exception as e:  # noqa: BLE001 - サブプロセス起動失敗等もフェイルオープンさせない
+            errs.append(f"--self-test 実行エラー: {f}: {e}")
+            continue
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            detail = tail[-1] if tail else "(出力なし)"
+            errs.append(f"--self-test 失敗: {f}（exit={proc.returncode}）: {detail[:200]}")
+    return errs
+
+
 def main() -> int:
     if not Path(".git").exists() and sh(["git", "rev-parse", "--git-dir"]).returncode != 0:
         return 2
@@ -290,6 +370,15 @@ def main() -> int:
                         warnings.append(entry)
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"危険パターン検査でエラー: {f}: {e}")
+
+    # --self-test を持つツールの自動実行（Issue #508・PR 作成前ゲート）
+    # SELF_REVIEW_SELFTEST=warn で Error を非ブロック化する逃げ道を用意
+    # （SELF_REVIEW_SECURITY と同じパターン。フレークな self-test 調査中の一時回避用）。
+    selftest_findings = self_test_errors(files)
+    if os.environ.get("SELF_REVIEW_SELFTEST", "block").lower() == "warn":
+        warnings.extend(selftest_findings)
+    else:
+        errors.extend(selftest_findings)
 
     # base-update-notes 追記リマインド（Issue #211・Warning 一本。Error 化は実測後に再検討）
     note_warn = update_notes_reminder(files)

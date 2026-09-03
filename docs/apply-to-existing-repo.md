@@ -71,7 +71,10 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 | 両側が変更 | **3 方向マージ** して採用する（`tools/merge_three_way.py`） |
 | 衝突した / 検証に落ちた / 祖先が使えない | **下流のファイルを温存** し、ベース最新を `<path>.base-latest` として横に置く |
 | 前回の `.base-latest` が未解決のまま残っている | マージせず `.base-latest` をベース最新へ更新し、**毎回「要確認」として再報告** する |
-| `modules.yaml` | 専用の意味マージャ（`scripts/merge_modules_yaml.py`）が下流の `enabled` / `project:` 値を復元する（行ベースのマージには通さない） |
+
+`modules.yaml` も上記の 4 分岐にそのまま乗る（専用の意味マージャは廃止済み。実測検証は Issue #509）。
+下流の `enabled: false` / `project:` 値はベース側が無変更なら触られず、両側が変更した場合も
+3 方向マージが下流の変更行をそのまま保持する。
 
 - **衝突マーカーはワークツリーに書かれない**。マージがクリーンで、かつ検証（衝突マーカー・JSON 構文・
   **重複キー**）を通ったときだけ採用する。壊れた `settings.json` でセッションが起動しなくなる、

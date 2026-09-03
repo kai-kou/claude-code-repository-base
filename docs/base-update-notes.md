@@ -31,6 +31,41 @@
 
 ---
 
+## 2026-09-03（Issue #512）マージ前に Layer 1 セルフレビュー実施をハーネスで観測する非ブロッキング nudge を追加
+
+**変更内容**:
+- `.claude/settings.json` に `PreToolUse`（matcher: `mcp__github__merge_pull_request`）と
+  `PostToolUse`（matcher: `mcp__github__pull_request_review_write`）の新規フックエントリを追加した。
+  `.claude/hooks/post-review-write-mark.sh` がレビュー提出（`method=create`+`event` または
+  `method=submit_pending`）を検知しセッションローカルのマーカーを記録し、
+  `.claude/hooks/pre-merge-layer1-check.sh` がマージ直前にマーカー未観測なら
+  `additionalContext` で非ブロッキング警告を出す（Layer 1 セルフレビューの実施をモデルの
+  自主性任せにせず機械観測する。ハードブロックはしない設計 — 詳細は各スクリプト冒頭コメント）。
+
+**下流で必要な手動手順**:
+- 通常は不要（`apply-to-repo.sh` の 3 方向マージが新規フックエントリを自動反映する）。
+- ただし下流が `.claude/settings.json` の `PreToolUse` / `PostToolUse` を独自にカスタマイズ済みで
+  マージ衝突が起きた場合は、`.claude/settings.json.base-latest` と見比べて上記 2 エントリを
+  手動でマージ先へ追記すること。
+
+## 2026-09-02（Issue #509）modules.yaml 専用マージャ（merge_modules_yaml.py）を廃止・通常の3方向マージへ統合
+
+**変更内容**:
+- `apply-to-repo.sh` の `SEMANTIC_MERGE_PATHS`（`modules.yaml` だけ行ベース 3 方向マージから除外する
+  特別扱い）を廃止し、他の `SYNC_PATHS` と同じ「ベース無変更ならスキップ / 下流が祖先のままなら更新 /
+  両側変更なら 3 方向マージ / 衝突なら下流温存 + `.base-latest` 併置」の 4 分岐へ統合した。
+- `scripts/merge_modules_yaml.py`（`enabled:false` / `project:` の 3 キーだけを個別復元する専用
+  スクリプト）を削除した。合成ケース検証（Issue #509）で、旧方式は復元対象外のカスタマイズ
+  （独自モジュール追加・コメント追記等）を再適用のたびに無条件で消していたことを確認した一方、
+  3 方向マージはそれらも自動保持し、真の衝突（同一行の書き換わり）時も他ファイルと同じく
+  安全側（下流温存）に倒れることを確認した。
+
+**下流で必要な手動手順**:
+- 通常は不要（挙動はより安全になる方向の変更で、`enabled:false` / `project:` の保護は引き続き働く）。
+- ただし過去の適用で `modules.yaml` への独自カスタマイズ（`enabled:false` 以外のコメント・独自モジュール
+  追加等）が既に消えている場合は復元されない（マージは今ある状態を守るだけ）。
+  `git log --all -p -- modules.yaml` から消失前のコミットを探し、1 回だけ手で戻すこと。
+
 ## 2026-08-30 apply-to-repo.sh を祖先つき 3 方向マージに変更・下流独自ルールは docs/rules/local/ へ
 
 **変更内容**:

@@ -64,6 +64,12 @@ Layer 2 失敗時は stderr に警告を出力し、Layer 0+1 で継続する（
 - 条件付きで Layer 2（敵対的議論）が必要な PR は、Layer 2 の verdict も解消してからマージする。
 - **Layer 1 の実行証跡は PR のレビューとして残っていることが前提**（#461）。インラインコメントも
   サマリーレビューも無い PR は「Layer 1 未実施」と同じ扱いにし、マージ前に実行する。
+- **機械観測層（Issue #512）**: PR 作成と同一セッションでマージまで進む場合、マージ直前フック
+  （`.claude/hooks/pre-merge-layer1-check.sh`）が `mcp__github__pull_request_review_write` の
+  提出（`post-review-write-mark.sh` が記録するセッションローカルのマーカー）を観測し、未観測なら
+  `additionalContext` で非ブロッキング警告を出す。これは手続きの観測であって品質の証明ではない
+  （指摘ゼロの空レビューでもマーカーは立つ）。PR 作成セッション ≠ マージセッション（`pr-review-watcher`
+  の復帰フロー等）ではマーカーが正当に不在になるため、警告が出てもマージをブロックしない。
 
 ## 関連
 

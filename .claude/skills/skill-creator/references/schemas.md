@@ -34,6 +34,12 @@ Defines the evals for a skill. Located at `evals/evals.json` within the skill di
 - `evals[].files`: Optional list of input file paths (relative to skill root)
 - `evals[].expectations`: List of verifiable statements
 
+> **決定論的採点版 body 最適化ループ（`scripts/run_body_loop.py`）は別形式を使う**: LLM grader
+> ではなく決定論的スクリプト（exit code）で採点するため、`prompt`/`expected_output`/`expectations`
+> は使わず `checker`（決定論チェッカーへのパス）・`evals[].category`（train/test 層化用）・
+> `evals[].input_text`（変換対象テキスト）を持つ。実例は
+> `.claude/skills/skill-creator/poc/cjk-markdown-fix/evals/evals.json` を参照（Issue #514）。
+
 ---
 
 ## history.json

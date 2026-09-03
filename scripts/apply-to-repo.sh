@@ -415,19 +415,11 @@ place_file() {  # $1=src $2=dst（属性を保って配置する）
   cp -a "$1" "$2"
 }
 
-# 専用の意味マージャを持つパスは行ベースの 3 方向マージに通さない。
-# modules.yaml は merge_modules_yaml.py が「ベース最新版に下流の enabled/project 値を
-# 復元する」形で扱う。行ベースに通すと、近接した編集を衝突と判定して意味マージャなら
-# 解決できたベース更新まで取りこぼす。
-SEMANTIC_MERGE_PATHS=("modules.yaml")
-
-is_semantic_merge_path() {
-  local p
-  for p in "${SEMANTIC_MERGE_PATHS[@]}"; do
-    [ "$1" = "$p" ] && return 0
-  done
-  return 1
-}
+# かつて modules.yaml は専用の意味マージャ（merge_modules_yaml.py）で行ベースの
+# 3 方向マージから除外していたが、祖先比較ガード込みの3方向マージ（Issue #509 で実測検証）は
+# enabled:false / project: 値に限らずあらゆる下流カスタマイズ（独自モジュール追加・コメント等）を
+# 保護でき、衝突時も他の SYNC_PATHS と同じく下流温存 + .base-latest 併置に倒れて安全なため、
+# 個別救済スクリプトを畳んで通常フローへ統合した（merge_modules_yaml.py は削除済み）。
 
 # ファイル 1 件を同期する。$1=リポジトリ相対パス
 sync_file() {
@@ -435,9 +427,8 @@ sync_file() {
   local src="$CLONE_DIR/$rel" dst="$TARGET/$rel"
   local anc merged
 
-  # 祖先が使えない / symlink（行ベースのマージ対象外）/ 専用の意味マージャを持つパス
-  # → そのまま配置する
-  if [ -z "$PREV_SHA" ] || [ -L "$src" ] || [ -L "$dst" ] || is_semantic_merge_path "$rel"; then
+  # 祖先が使えない / symlink（行ベースのマージ対象外）→ そのまま配置する
+  if [ -z "$PREV_SHA" ] || [ -L "$src" ] || [ -L "$dst" ]; then
     if $DRY_RUN; then log "  ~ would place: $rel"; else place_file "$src" "$dst"; fi
     N_COPIED=$((N_COPIED + 1))
     return
@@ -535,26 +526,12 @@ copy_path() {
 
 log "── ルール・スキル・ハーネスを同期 ──"
 resolve_prev_sha
-# modules.yaml は SEMANTIC_MERGE_PATHS として毎回ベース最新版で置き換える（行ベースの
-# 3 方向マージに通さない）。下流の enabled:false / project: 値は退避した旧版から
-# merge_modules_yaml.py で復元する（Issue #196）
-MODULES_YAML_BACKUP=""
-if [ -f "$TARGET/modules.yaml" ] && ! $DRY_RUN; then
-  MODULES_YAML_BACKUP="$TMP/modules.yaml.pre-sync"
-  cp -a "$TARGET/modules.yaml" "$MODULES_YAML_BACKUP"
-fi
+# modules.yaml も通常の sync_file（guard → fast-forward → 3方向マージ → 衝突退避）に乗る。
+# 下流の enabled:false / project: 値は、ベースが無変更なら guard で一切触れられず、
+# ベースが変更した場合も 3 方向マージが下流の変更行をそのまま保持する（Issue #509）。
 for p in "${SYNC_PATHS[@]}"; do
   copy_path "$p"
 done
-if [ -n "$MODULES_YAML_BACKUP" ] && [ -f "$TARGET/scripts/merge_modules_yaml.py" ]; then
-  if command -v python3 >/dev/null 2>&1; then
-    # set -e 下で失敗するとマーカー更新前に中断してしまうため、失敗しても続行する
-    python3 "$TARGET/scripts/merge_modules_yaml.py" "$MODULES_YAML_BACKUP" "$TARGET/modules.yaml" \
-      || log "  ⚠ modules.yaml の設定復元に失敗しました（$MODULES_YAML_BACKUP と見比べて手動で復元してください）"
-  else
-    log "  ⚠ python3 が見つからないため modules.yaml の enabled 復元をスキップします（$MODULES_YAML_BACKUP と見比べて手動で復元してください）"
-  fi
-fi
 
 # --- 4. .claude/settings.json（ハーネス本体）の導入 ---
 SETTINGS_SRC="$CLONE_DIR/.claude/settings.json"

@@ -130,11 +130,13 @@
       { "matcher": "Read|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/permission-request-auto-allow.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash|mcp__github__create_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-router.sh" } ] }
+      { "matcher": "Bash|mcp__github__create_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-router.sh" } ] },
+      { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-merge-layer1-check.sh" } ] }
     ],
     "PostToolUse": [
       { "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-validate.sh" } ] },
-      { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-merge-publish-check.sh", "timeout": 90 } ] }
+      { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-merge-publish-check.sh", "timeout": 90 } ] },
+      { "matcher": "mcp__github__pull_request_review_write", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-review-write-mark.sh" } ] }
     ],
     "PostToolUseFailure": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post-tool-use-failure.sh" } ] }

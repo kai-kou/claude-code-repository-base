@@ -7,6 +7,8 @@ content/pipeline-state/
 content/analytics/*
 # スプリント較正の実測データだけはコミット対象（session-sprint-rules.md §5/§6・#45）
 !content/analytics/sprint/
+# rejected-edit buffer（skill-creator 本体最適化ループの reject 記録・Issue #514）
+!content/analytics/skillopt/
 # 月次コストレポート（content/analytics/cost_monthly/）は main では追跡しない（#242）。
 # 永続化は tools/commit_cost_telemetry.py がテレメトリ専用データブランチ
 # telemetry/cost-data へ 1 日 1 回 push する（Stop hook 経由・gh 非依存）。

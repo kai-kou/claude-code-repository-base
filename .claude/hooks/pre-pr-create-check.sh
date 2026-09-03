@@ -218,6 +218,10 @@ fi
 
 # 6. セルフレビュー機械チェック（docs/rules/self-review-checklist.md・Lv3）
 # Error 検出時のみブロック。チェッカー自体の異常（python 不在等・exit>1）ではブロックしない。
+# ただし exit=124（timeout コマンドによる強制終了）は「チェッカー異常」ではなく「チェック未完了」
+# のため、フェイルオープンにせずブロックする（--self-test 自動実行・Issue #508 のレビューで判明:
+# self_test_errors() は 40 秒の内部予算で自制するが、他チェックの想定外の遅延も含め、ここでの
+# 90 秒はあくまで安全マージンであり主防衛線は self_review_check.py 側の予算管理）。
 # サブディレクトリから gh pr create が実行されてもスキップされないようリポジトリルートで実行する
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 check_output=""
@@ -225,7 +229,7 @@ if [ -f "$repo_root/tools/self_review_check.py" ]; then
   cd "$repo_root" || exit 0
   check_exit=0
   if command -v timeout >/dev/null 2>&1; then
-    check_output=$(timeout 60 python3 tools/self_review_check.py 2>&1) || check_exit=$?
+    check_output=$(timeout 90 python3 tools/self_review_check.py 2>&1) || check_exit=$?
   else
     # macOS 等 timeout 不在環境のフォールバック
     check_output=$(python3 tools/self_review_check.py 2>&1) || check_exit=$?
@@ -236,6 +240,10 @@ if [ -f "$repo_root/tools/self_review_check.py" ]; then
 ${check_output}
 
 Error を修正してから PR 作成を再実行してください（チェックシート: docs/rules/self-review-checklist.md）。"
+  elif [ "$check_exit" -eq 124 ]; then
+    hook_block "[pre-pr-create-check] セルフレビュー機械チェックが 90 秒以内に完了しませんでした（--self-test の実行に時間がかかっている可能性があります）。
+
+ローカルで \`python3 tools/self_review_check.py\` を実行し、遅い --self-test の原因を確認してから PR 作成を再実行してください。"
   fi
 fi
 

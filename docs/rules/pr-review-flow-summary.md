@@ -18,7 +18,7 @@
 
 ## PR 作成時の必須事項（コマンド仕様は各ツールの description に従う）
 
-0. **自動保全コミットの書き換え（必須・#483）**: ブランチに `[wip]` 件名の自動保全コミットが残っていたら、PR 作成前に自分の作業記憶から **意味のある粒度・意味のあるメッセージ** へ書き換える（件名だけなら `git commit --amend`、粒度が潰れているなら `git reset --soft origin/main` → 論理単位ごとに再コミット → `git push --force-with-lease`）。squash タイトルは単一コミットブランチでその件名を継承するため、放置すると main の履歴が意味を成さなくなる。`pre-pr-create-check.sh` が機械ブロックする
+0. **自動保全コミットの書き換え（必須・#483）**: ブランチに `[wip]` 件名の自動保全コミットが残っていたら、PR 作成前に意味のある粒度・メッセージへ書き換える。`pre-pr-create-check.sh` が機械ブロックし、書き換え手順（amend / `reset --soft` 起点の再コミット）をエラーメッセージ内に案内する
 1. `mcp__github__create_pull_request`（`head`={作業ブランチ} / `base`=main）。本文に **`Session-Id: $CLAUDE_CODE_SESSION_ID`**・`Sprint Goal:` 1 行・`sp:N` を必ず含める（`--mine` 所有判定と done_sp 計測の前提）
 2. **PR 存在確認（必須・L-050）**: `mcp__github__list_pull_requests` で `head` を指定して実在を確認する（作成の成否をレスポンスだけで判断しない）
 3. Slack 通知: `python3 tools/slack_notify.py pr --pr-url ... --pr-title "[PR作成] ..." --branch ...`

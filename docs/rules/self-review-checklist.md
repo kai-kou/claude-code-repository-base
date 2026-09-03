@@ -83,6 +83,7 @@
 | ☐ | コマンドインジェクション・任意コード実行（`shell=True`+非定数・`eval`/`exec`・`os.system`・`pickle.load`・`yaml.load` 非 Safe） | **機械**（`scan_dangerous_patterns.py` DP101-106・Error でブロック） | #56（FAIR Layer 0 強化・動作確認 #55 で見逃し検出） |
 | ☐ | 並行セッション競合（ローカルファイル排他・TOCTOU） | 目視 | 90 件（CP-4） |
 | ☐ | ハードコード値の定数化・出所コメント | 目視 | 86 件 |
+| ☐ | 変更した `tools/`・`scripts/` の Python ファイルが `--self-test` を持つ場合、その self-test が通るか | **機械**（`self_review_check.py` の `self_test_errors()`・Error でブロック。`SELF_REVIEW_SELFTEST=warn` で非ブロック化可） | Issue #508 |
 
 ## 4. ドキュメント・スキル（`docs/` `.claude/` `CLAUDE.md`）
 

@@ -1,6 +1,6 @@
 ---
 name: waiting-user-handler
-description: status:waiting-user の Issue を定期トリアージし、ユーザー確認最小化（A/B/C/D分類）で自動解決できるものは自律処理、真にユーザー判断が必要なものだけを事前リサーチ＋推奨案付きで AskUserQuestion でまとめて提示し、回答に基づいて処理するスキル。「waiting-user対応して」「waiting-userのIssueを確認して」「/waiting-user-handler」と依頼された時、またはプロジェクト定義の棚卸しスロットで自動実行する。Issue ラベルのトリアージが役割で、PR のレビュー監視・マージは pr-review-watcher を使う。
+description: status:waiting-user の Issue を定期トリアージし、ユーザー確認最小化（A/B/C/D分類）で自動解決できるものは自律処理、真にユーザー判断が必要なものだけを事前リサーチ＋推奨案付きで AskUserQuestion でまとめて提示し、回答に基づいて処理するスキル。「waiting-user対応して」「waiting-userのIssueを確認して」「/waiting-user-handler」と依頼された時、またはプロジェクト定義の棚卸しスロットで自動実行する。Issue ラベルのトリアージが役割で、PR のレビュー監視・マージは pr-review-watcher を使う。ユーザーが実際に画面を操作する必要がある工程を 1 手順ずつ案内して一緒に進める段階は interactive-guide に委譲する（本スキルはトリアージ・提示までを担う）。
 effort: medium
 ---
 
