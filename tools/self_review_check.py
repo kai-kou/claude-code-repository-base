@@ -243,13 +243,26 @@ def hot_budget_reminder(files: list[str]) -> str | None:
 SELF_TEST_PER_TOOL_TIMEOUT = 15
 SELF_TEST_BUDGET_SECONDS = 40
 
+# 対象判定は基本 "--self-test" 文字列の有無で機械的に拾うが（新設ツールが自動で対象へ加わる）、
+# チェッカー自身は .py に変更が無くても、監視対象の非 .py ファイル（.sh 等）が変更されたら
+# 起動すべきものがある。例: tools/check_distribution_boundary.py は scripts/apply-to-repo.sh の
+# SYNC_PATHS を検査するが、SYNC_PATHS だけを書き換える PR では check_distribution_boundary.py
+# 自身が diff に含まれず self-test が起動しない（Issue #542 の Layer 1 セルフレビューで発覚）。
+COMPANION_SELF_TESTS: dict[str, tuple[str, ...]] = {
+    "scripts/apply-to-repo.sh": ("tools/check_distribution_boundary.py",),
+    "scripts/publish-snapshot.sh": ("tools/check_distribution_boundary.py",),
+    "scripts/bootstrap.sh": ("tools/check_distribution_boundary.py",),
+}
+
 
 def self_test_errors(files: list[str]) -> list[str]:
     """差分に含まれる --self-test 対応ツールを実行し、失敗を Error として返す（Issue #508）。
 
     対象判定はソース内の "--self-test" 文字列の有無で機械的に拾う（ハードコードの
     許可リストを持たないため、新設ツールが自動的に対象へ加わる）。差分に該当ツールが
-    無ければ何も実行しない（既存 PR の所要時間を増やさない）。
+    無ければ何も実行しない（既存 PR の所要時間を増やさない）。加えて、COMPANION_SELF_TESTS
+    に登録された非 .py トリガーファイルが差分に含まれる場合は、対応する自己テストツールを
+    diff への出現有無に関わらず対象に加える。
 
     本ファイル自身はこの docstring 内にも "--self-test" 文字列を含むため、対象判定に
     そのまま乗せると自分自身をサブプロセスとして再帰起動し無限にハングする。ファイル
@@ -282,6 +295,14 @@ def self_test_errors(files: list[str]) -> list[str]:
         and Path(f).resolve() != self_path
         and _is_allowed(Path(f).resolve())
     ]
+    for trigger, companions in COMPANION_SELF_TESTS.items():
+        if trigger not in files:
+            continue
+        for companion in companions:
+            if companion in targets:
+                continue
+            if _is_allowed(Path(companion).resolve()):
+                targets.append(companion)
 
     started = time.monotonic()
     for f in targets:

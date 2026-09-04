@@ -22,6 +22,8 @@ Opus 4.8 の effort デフォルト変更）。なお **新モデル世代のリ
   ↓
 tools/check_claude_code_updates.py --create-issue   ← 検知（LLM 非依存・軽量）
   ├─ 新バージョンなし（exit 10）→ 何もしない
+  ├─ 新バージョンあり（exit 0）→ 分類とは独立に tools/probe_permission_prompts.sh を実行（権限プローブ・実挙動の実測）
+  │    exit 1 → [CC-Sync][破壊的変更] 権限プローブ検知 Issue を追加起票（Step 1 へ）/ exit 2 → 判定不能を Issue に明記
   ├─ 破壊的変更を検知 → [CC-Sync][破壊的変更] Issue 起票 + "BREAKING_DETECTED" 出力
   │    → 同セッションが claude-code-spec-sync スキル Step 1 を即実行（即対応レーン）
   │       影響調査（横断 Grep）→ 公式裏取り → 最小差分修正 → PR → L1 レビュー → マージ
@@ -45,8 +47,15 @@ tools/check_claude_code_updates.py --create-issue   ← 検知（LLM 非依存�
 
 - 機械分類は取りこぼし側に倒す（誤って「その他」に落ちた破壊的変更は、障害として顕在化した時点で
   L-077 プロトコル + 本レーンのキーワード辞書更新で回収する）
+- **キーワード辞書で拾えない挙動変化は権限プローブが補完する**（`tools/probe_permission_prompts.sh`・新バージョン検知時に
+  分類結果に関わらず実行）。v2.1.260 の "Reverted the 2.1.259 change applying Read() deny rules to Bash arguments" 行は
+  どの辞書にも一致せず「その他」に落ちて影響なしと記録された（#558）。辞書の追加はいたちごっこになるため、
+  権限・deny・Bash 引数の領域は実測で検知する
 - 例外: 「Fixed ...」で始まる行はバグ修正のため、明示的に "breaking" を含まない限り「その他」へ
   デモートする（"no longer" / "removed" を本文に含むだけの修正行の誤検知が多いため・2026-07-17 実測）
+- 🔴 **記録の「N件」＝ツールが breaking 判定した件数**（CHANGELOG 全行の精読ではない）。v2.1.257 で
+  「3件を横断確認済み」と記録しながら `breaking_keywords` 不一致の関連変更 4 件が欠落し矛盾指摘された（#548）。
+  記録時は「N 件」の意味を明示し、関連する Fixed/Added 行が別途見つかった場合はそちらへの参照を添える
 - 🔴 **クラウドセッションでの既知化漏れ（実例: v2.1.225・#457）**: `gh`/REST が両方不可な環境では
   `--create-issue` の起票が失敗し、当該バージョンの dedup キーが state から自動的に取り消される
   （次回リトライ用の設計）。エージェントが `mcp__github__*` で Issue 対応を out-of-band に完遂しても

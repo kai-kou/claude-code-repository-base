@@ -31,6 +31,41 @@
 
 ---
 
+## 2026-09-04（Issue #558）auto モード承認プロンプト多発の根本原因確定 — `--exclude` 自動付与フックの撤去と権限プローブの新設
+
+**変更内容**:
+- 下流で多発した「auto モードでも `grep -rn ... .` / `cd DIR; grep ...` が承認プロンプトになる」事象の根本原因は
+  **Claude Code v2.1.259 固有のリグレッション**（`Read(...)` deny が 1 つでもあると走査系 Bash を ask にする
+  `deniedPathInsideDirectory` チェック）で、**v2.1.260 で Anthropic 側が revert 済み**。v2.1.259 / v2.1.260 の
+  実バイナリ比較と headless プローブで確定した（`docs/rules/lessons/permissions.md` L-127 を訂正）。
+- 2026-09-03 の PR #547 で入れた対策（再帰 grep に `--exclude` を自動付与する PreToolUse フック）は
+  **v2.1.259 に効かず、v2.1.260 では不要** と実測で確定したため **撤去** した。**削除ファイル**:
+  `.claude/hooks/lib/grep_exclude_normalize.py` / `tools/test_grep_exclude_normalize.sh`（`pre-tool-use-router.sh` は
+  該当ブロックを除去して更新）。`.claude/settings.json` の `permissions.allow`（read-only コマンド列挙）は維持。
+- `tools/probe_permission_prompts.sh` を新設。`claude -p --permission-mode auto` で固定コマンド列を投入し、
+  `permission_denials` で ask/deny を機械判定する（陽性対照 `cat .env` 必須・exit 0/1/2）。
+  `claude-code-spec-sync` スキルは新バージョン検知時に分類結果に関わらずこれを実行する。
+  `config/claude_code_spec_sync.yaml` の `breaking_keywords` に `revert` を追加。
+
+**下流で必要な手動手順**:
+- **実害の解消はベース側の反映を待つ必要がない**（Anthropic 側の revert で新しいコンテナから解消済み）。
+  事象が出ているセッションは **新しいセッションを開始し、`claude --version` が 2.1.260 以上** であることを確認する。
+  2.1.259 のセッションを続けざるを得ないときは、リポジトリ横断の再帰検索に **ネイティブ `Grep` ツール** を使う
+  （両バージョンで deny 対象を黙って除外しプロンプトを出さない・実測済み）。`--exclude` 付与・絶対パス化は
+  無効と実測済みなので回避策として続けない。`permissions.deny` の `Read(.env)` 等は緩めない。
+- `apply-to-repo.sh` はファイル削除を伝播しないため、再適用後に下流へ残る
+  `.claude/hooks/lib/grep_exclude_normalize.py` と `tools/test_grep_exclude_normalize.sh` は未参照の孤立ファイル。
+  `git rm` で削除してよい（残しても実害なし。更新後の `pre-tool-use-router.sh` は参照しない）。
+- セッション途中で apply-base してもフック変更は再読込されない（起動時スナップショット・公式仕様）。
+  フック変更の効果を見るには新セッションを開始する。
+- `tools/probe_permission_prompts.sh` 単体の定期実行（cron / Routine）は配布しない。ただし `claude-code-spec-sync`
+  モジュールを有効化している下流では、同モジュールの **新バージョン検知サイクルの一部として自動実行される**
+  （分類結果に関わらず実行・コスト目安 sonnet × 6 呼び出し / 回・exit 1 で Issue が起票される）。spec-sync を使わない
+  下流では、権限プロンプトの異常を疑ったときに手動で `bash tools/probe_permission_prompts.sh` を実行し、exit 1 なら
+  公式 CHANGELOG で revert / fix 済みかを確認してから Issue 化する（恒久的なハーネス回避策を先に作らない）。
+
+---
+
 ## 2026-09-03（Issue #543）完了報告の重複出力対策 — PR 確認済みマーカーと続行ターン規律
 
 **変更内容**:

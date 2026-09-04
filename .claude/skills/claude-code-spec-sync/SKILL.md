@@ -58,6 +58,15 @@ gh issue list --label "lane:claude-code-spec" --state open --json number,title,l
 ```
 
 - 新規検知なし かつ オープン lane Issue なし → **即終了**（担当タスクへ）
+- 🔴 **新バージョンを検知したら（exit 0）、分類結果（破壊的 / 新機能 / その他）に関わらず権限プローブを実行する**
+  （キーワード辞書では拾えない挙動変化の実測検知・L-127 訂正の再発防止。v2.1.260 の "Reverted ..." 行が
+  「その他」に落ちて影響なしと記録された見落としが起点・議論記録 `auto-mode-prompt-root-cause-20260904`）:
+  ```bash
+  bash tools/probe_permission_prompts.sh          # 0=OK / 1=検知 / 2=判定不能（サイレントに成功扱いしない）
+  ```
+  exit 1 → `[CC-Sync][破壊的変更] 権限プローブ検知 v{バージョン}` として Issue 化し Step 1 へ（恒久的なハーネス回避策は作らず、
+  公式 CHANGELOG で revert / fix 済みかを先に確認する）。exit 2 → 陽性対照不成立を Issue 本文に明記して `status:waiting-claude`
+  で残す（環境要因の切り分けが先）。所要は sonnet × 6 呼び出し程度
 - `[CC-Sync][破壊的変更]` Issue あり → **Step 1（即対応）を最優先**
 - `[CC-Sync][検証]` Issue のみ → Step 2（検証・検討）を **1スロット1件** 消化
 

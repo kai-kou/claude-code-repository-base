@@ -14,7 +14,7 @@
 |---|---|---|---|
 | セッションを開くたび「main に直接 push しないで」「作業ブランチを切って」と言い直している | ルール一式が `.claude/rules/` に常駐し全セッションで自動読込される。自分でルールを書き起こす必要がない | 📋 | `CLAUDE.md` / `docs/rules/` / `.claude/rules/`（symlink） |
 | うっかり `main` へ push してしまう / 事故が怖くて自律実行させられない | `main` / `master` への直接 push が **物理的にブロック** される | 🔒 | `.claude/hooks/pre-git-push-check.sh` |
-| `.env` や鍵ファイルを読ませてしまう事故が怖い | `.env`・秘密鍵・認証情報ファイルへのアクセスがブロックされる。Bash 経由はフック、Read / Write 経由は権限設定で二重に塞ぐ（`.env.example` 等のテンプレートは通す） | 🔒 | `.claude/hooks/pre-tool-use-router.sh` / `.claude/settings.json` の `permissions.deny` |
+| `.env` や鍵ファイルを読ませてしまう事故が怖い | `.env`・秘密鍵・認証情報ファイルへのアクセスがブロックされる（`.env.example` 等のテンプレート名も含め一律ブロック）。Bash 経由はフック、Read / Write 経由は権限設定で二重に塞ぐ | 🔒 | `.claude/hooks/pre-tool-use-router.sh` / `.claude/settings.json` の `permissions.deny` |
 | 実装のたび「PR 作っていいですか」と聞かれ、レビューとマージを自分で追いかけている | 実装 → セルフレビュー → PR 作成 → 指摘対応 → マージまで、確認を挟まず進める運用ルールになっている | 📋 | `docs/rules/pr-review-flow-summary.md` / `pr-review-watcher`・`code-review`・`self-reviewer` スキル |
 | 未コミットのまま PR が作られて中身が空になる | 未コミット / 未 push 状態、セルフレビューの機械チェックが Error の状態では PR 作成がブロックされる | 🔒 | `.claude/hooks/pre-pr-create-check.sh` |
 | 長い会話でコンテキスト圧縮が起きると作業中の変更を見失う | 圧縮の前後で未コミット変更が自動 commit & push される（**クラウド実行環境のみ**・作業ブランチ限定。ローカル CLI では発火しない） | 🔒 | `.claude/hooks/pre-compact.sh` / `post-compact.sh` |
