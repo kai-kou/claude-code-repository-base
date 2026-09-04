@@ -35,6 +35,8 @@ Step 0: ブランチ確認・作業ブランチ作成
   ↓
 Step 1: 未対応 Try Issue の取得・ソート
   ↓
+Step 1.5: 未着手 Try の TTL 自動クローズ（30 日更新なし → not_planned・最大 5 件）
+  ↓
 Step 2: Issue を分類（ドキュメント / スクリプト / バリデーション / スキル / ユーザー対応）
   ↓
 Step 3: small / medium を優先実装（large はコメントのみ）
@@ -89,11 +91,23 @@ mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])
 2. urgency ラベル未設定（旧形式）は `priority:high/medium/low` → なしの順にフォールバック
 3. 同順位内は `createdAt` 古い順
 
-**doc-only Issue の月曜スキップルール**: `urgency:doc-only` のみが対象の場合、**月曜日のみ処理** する（火〜日はスキップ。理由・実装は `reference.md` A）。
+`urgency:doc-only` は曜日で絞らず毎日候補に含める（旧「月曜のみ処理」ルールは廃止・#563。tier 99 のまま最下位で競合するため、深い在庫では Step 1.5 の TTL が退出させ、選ばれた場合は同一カテゴリ small としてバンドル PR にまとめる）。
 
 1-B（更新系 Issue）の取得・優先順位も `reference.md` A を参照（ツール/SDK 更新 > 制作ツール更新 > ドメイン/戦略更新 > 通常の retro-try）。
 
-対象が 0 件の場合は「未対応の retro-try Issue はありませんでした」と出力して終了する。
+対象が 0 件の場合は「未対応の retro-try Issue はありませんでした」と出力して終了する（Step 1.5 の TTL クローズは対象 0 件でも実行済みであること）。
+
+---
+
+## Step 1.5: 未着手 Try の TTL 自動クローズ（振り返りレーン内の出口）
+
+> 数値（TTL 30 日・1 回最大 5 件・reopen 窓 90 日）の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」。
+> `type:retro-try` はリファインメントの 4 出口から除外されている（`improvement-lane-map.md` §2 ルール 5・#160）ため、
+> 「実装する」以外の出口を **振り返りレーン内のこの Step** が持つ。Step 2 の選定より前に在庫を減らしてから優先順位付けする。
+
+Step 1 で取得した `type:retro-try` オープン Issue のうち、**`status:waiting-claude` で `urgency:blocker` でなく、30 日間更新がないもの**（`done_type:D-plan` の large も含む）を `not_planned` でクローズし、再発時に reopen される旨のコメントを残す。1 回の実行で **最大 5 件**（残りは次回へ持ち越す。1 件 = 2 呼び出しのため、ツール呼び出し上限〔8 個/ターン〕に合わせて中間報告を挟みターンを分けてよい）。
+
+判定式・API 呼び出し・コメントテンプレート・エラー時の扱いは **`reference.md` H が唯一の定義**（本 Step では再掲しない）。
 
 ---
 
@@ -122,8 +136,11 @@ mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])
 | 30件以上 | 5件 | 最大スループット |
 
 > 1 ターンのツール呼び出しは 8 個以内（`session-safety-rules.md`）。処理上限を増やすときは中間報告を挟んで複数ターンに分散する。
+> バックログ残件数 30 件以上は `retrospective` 側の WIP 上限（`docs/rules/retrospective-rules.md`「WIP 制御」）と同じ境界で、発生側が新規起票を止めている状態。
 
 推定工数ごとの対応方針: `small` は処理上限まで実装、`medium` は 1〜2 件、`large` は実装計画コメントのみ投稿（`done_type:D-plan` を付与し次回に回す）。
+
+**large の空撃ち防止（#563）**: `large` の選出は **1 セッションにつき 1 件まで**（実装計画コメントのみで枠を消費し、クローズ 0 件のまま処理上限を圧迫するのを防ぐ）。さらに **既に `done_type:D-plan` が付いており、前回の計画コメント以降に新しいコメント・ラベル変更がない Issue は選出しない**（同じ計画コメントの再投稿を止め、更新が止まった large は Step 1.5 の TTL が退出させる。詳細は `reference.md` C-4）。
 
 ---
 

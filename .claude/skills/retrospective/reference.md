@@ -162,14 +162,31 @@ KPT（Keep/Problem/Try）を以下の形式で出力してください。
 
 ---
 
-## F. Step 3-A: 既存オープン Issue との重複チェック
+## F. Step 3-A: 既存 Issue との重複チェック（OPEN → CLOSED/not_planned の 2 段）
 
-Issue 作成前に、`type:retro-try` ラベルのオープン Issue を検索し、類似する Issue がないか確認する。
+Issue 作成前に、`type:retro-try` ラベルの既存 Issue と突合し、類似する Issue がないか確認する。
+検索は **Step 3-0 で取得済みの 2 リスト**（`open_list` / `closed_list`）に対して行い、Try ごとに API を叩き直さない。
 
-MCP（クラウド・一次経路）:
+MCP（クラウド・一次経路・Step 3-0 で各 1 回だけ実行）:
 ```
-mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])
+open_list   = mcp__github__list_issues(owner, repo, state="OPEN",   labels=["type:retro-try"])
+closed_list = mcp__github__list_issues(owner, repo, state="CLOSED", labels=["type:retro-try"], since={90 日前の ISO 8601 UTC})
+              # 応答に state_reason は含まれない（fields は number/title/body/state/user/labels/assignees/comments/
+              # created_at/updated_at/field_values のみ）。ここでは理由で絞らず、類似ヒット時に個別確認する（下記 2）
 ```
+
+判定順:
+1. `open_list` に類似あり → G（既存 Issue へコメント追記）
+2. 1 で一致なし、かつ `closed_list` に類似あり → `mcp__github__issue_read(method="get", issue_number={N})` で `state_reason` を確認する
+   （類似ヒット時のみの追加 1 呼び出し）:
+   - `not_planned`（TTL クローズ済み・retro-try-handler Step 1.5 由来）→ **reopen**:
+     `mcp__github__issue_write(method="update", issue_number={N}, state="open")`（**`labels` は渡さない**。渡さなければ全置換の
+     対象にならず `status:waiting-claude` を含む元のラベルが保持される）。続けて G の再発検知テンプレートを投稿し、
+     末尾に「TTL クローズ（not_planned）から再発により reopen」の 1 行を添える。reopen は Step 3 の起票上限・WIP 上限の対象
+   - `completed`（実装済み）→ 退行として扱い、3 へ進む（新規作成。本文に「#N で実装済みの内容が再発」と記載）
+3. どちらにも一致なし → H（新規作成。ただし Step 3 の起票上限・WIP 上限の範囲内のみ）
+
+90 日窓（`since`）は closed Issue の全件検索コストを避けるための境界（数値の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」）。
 
 ローカル環境（gh CLI 到達可能時）の代替:
 ```bash

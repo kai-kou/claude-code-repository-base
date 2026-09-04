@@ -206,12 +206,12 @@ gh issue list -R __OWNER__/__REPO__ --label "type:retro-try" --label "priority:h
 
 ### Step 3: Try アイテムの Issue 化
 
-全 Try アイテムについて GitHub Issue を作成する:
+WIP 制御（本ファイル「WIP 制御」節・#563）の範囲内で GitHub Issue を作成する:
 
-1. 優先度 `high` のアイテムから順に処理
-2. 類似した Try は 1 Issue にまとめる（タイトルに両方の観点を記載）
-3. `mcp__github__issue_write` で Issue を作成する
-4. 作成した Issue 番号を記録する
+1. オープン `type:retro-try` 件数を 1 回取得し、WIP 上限（30 件）以上なら追記のみモード（新規作成なし）
+2. 優先度 `high` のアイテムから順に処理し、類似した Try は既存 Issue へのコメント追記（または TTL クローズ済み Issue の reopen）にまとめる
+3. 類似がない Try のみ `mcp__github__issue_write` で Issue を作成する（1 回のレトロで最大 3 件・`urgency:blocker` は上限外）
+4. 作成した Issue 番号と、見送った Try（起票上限 / WIP 上限）を記録する
 
 ### Step 4: Slack 通知
 
@@ -250,9 +250,28 @@ python3 "${CLAUDE_PROJECT_DIR}/tools/slack_notify.py" pipeline \
 - Try Issue の対応: クラウドは `mcp__github__list_issues(labels=["type:retro-try"], state="OPEN")`（L-114）/ ローカルは `gh issue list -R __OWNER__/__REPO__ --label "type:retro-try" --state open`
 ```
 
+## WIP 制御（発生・在庫・出口の数値 SSOT・#563）
+
+> **このセクションが振り返りレーンの WIP 制御に関する数値の唯一の定義**。各 SKILL.md はここを参照し、数値を再定義しない。
+> 背景: 「振り返り = Try を全件 Issue 化する」設計は WIP 制限のない PUSH 型で、到着率 λ がパイプライン回数に比例して
+> 無制限に伸びる一方、消化側は上限つきのため在庫 L = λW（リトルの法則・Little 1961）が単調増加する。
+> 消化上限の引き上げだけでは λ が上回る限り解決しない。設計議論は `content/discussions/retro-issue-overflow-20260904/`。
+
+| 制御点 | 値 | 実装先 | 根拠 |
+|--------|-----|--------|------|
+| **起票上限**（1 回のレトロで新規 Issue 化する Try） | **3 件**（`urgency:blocker` は上限外。priority high → medium の順に採用し、超過分は完了報告の「見送り Try」に記録） | `retrospective` Step 3 | Kanban の WIP 制限（Anderson『Kanban』2010）・スクラムガイド 2020「最もインパクトの大きい改善だけをスプリントバックログへ」 |
+| **WIP 上限**（オープン `type:retro-try` の累積） | **30 件**（以上で `retrospective` が「追記のみモード」= 新規 Issue 作成を停止し既存 Issue への追記のみ行う） | `retrospective` Step 3-0 | プルシステムは「引く場所」で WIP を強制する（同上）。`retro-try-handler` の処理上限表「30 件以上」・`workflow-health-check` 5-a の 30 件 Warning と同じ数値 |
+| **TTL 出口**（未着手 Try の自動クローズ） | **30 日** 更新なし（`status:waiting-claude` かつ `urgency:blocker` でない Issue を `not_planned` でクローズ。1 回の実行で最大 **5 件**） | `retro-try-handler` Step 1.5 | 出口のない在庫は L を単調増加させる。`workflow-health-check` 5-e の「30 日で沈黙」と同じ数値 |
+| **再発 reopen 窓** | **90 日**（TTL でクローズされた Issue と同種の Try が再検出されたら reopen して再発コメント） | `retrospective` reference.md F | 誤クローズの回復コストを下げ TTL を安全側に倒す |
+
+上限値を変えるときは **本表を先に更新** し、各 SKILL.md / reference.md が出典明記のうえ再掲している値を **同一 PR で更新する**
+（再掲箇所は `grep -rn "WIP 制御" .claude/skills docs/rules` で列挙できる。参照なしの独立した数値定義は作らない）。
+下流プロジェクトが値を変える場合も同様で、`project-mission.md` に上書き値を書く場合はここを参照させる。
+
 ## 禁止事項
 
-- Try アイテムを Issue 化せずに「次回気をつける」で済ませない
-- 同じ Problem が 2 回以上繰り返されても新しい Try Issue を作らないでいる
+- Try アイテムを Issue 化せずに「次回気をつける」で済ませない（**例外**: 上記 WIP 制御の起票上限・WIP 上限で見送った Try は Issue 化しないが、完了報告の「見送り Try」に **記録は残す**。記録が残る限り本条項の対象外）
+- 同じ Problem が 2 回以上繰り返されても新しい Try Issue を作らないでいる（**例外**: WIP 上限中は既存 Issue への再発コメント追記で代替する。TTL クローズ済み Issue は新規作成ではなく reopen で扱う）
+- 1 回のレトロで起票上限（3 件）を超えて新規 Issue を作る・WIP 上限（30 件）以上の状態で新規 Issue を作る（在庫の発散を防ぐ WIP 制御の無効化）
 - KPT を 3 役割の並列実行ではなく逐次実行する（並列化必須）
 - `type:retro-try` ラベルなしで Try Issue を作成する（フィルタリングが機能しなくなる）

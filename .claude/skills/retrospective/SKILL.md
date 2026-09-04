@@ -58,7 +58,7 @@ Step 1: Agent Teams 起動（3役割を並列サブエージェント・全て h
   ↓
 Step 2: KPT 結果のマージ・重複統合
   ↓
-Step 3: Try アイテムを GitHub Issue 化（重複チェック → 追記 or 新規作成）
+Step 3: Try アイテムを GitHub Issue 化（Step 3-0 WIP ゲート → 重複チェック → 追記 or 新規作成〔上限 3 件〕）
   ↓
 Step 4: Slack 通知 → Step 5: 完了報告 → Step 6: lessons 更新チェック
 ```
@@ -106,15 +106,37 @@ git status              # ステージ・作業ツリーの状態
 
 ## Step 3: Try アイテムを GitHub Issue 化
 
-統合済みの全 Try アイテムを `high` → `medium` → `low` の順に処理する。各アイテムごとに:
+> 数値（起票上限 3 件・WIP 上限 30 件・reopen 窓 90 日）の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」。本 Step は参照のみで再定義しない。
+
+### Step 3-0: WIP ゲート判定（Issue 化ループの前に 1 回だけ）
+
+Step 3 冒頭で次の 2 リストを **各 1 回だけ** 取得し、以降の全 Try の突合に使い回す（Try 件数に関わらず API 呼び出しは定数 2 回）:
 
 ```
-Step 3-A: 既存オープン Issue との重複チェック（type:retro-try を検索）
-  ├── 類似 Issue あり → Step 3-B: 既存 Issue にコメント追記
-  └── 類似 Issue なし → Step 3-C: 新規 Issue を作成
+open_list   = mcp__github__list_issues(owner, repo, state="OPEN",   labels=["type:retro-try"])
+closed_list = mcp__github__list_issues(owner, repo, state="CLOSED", labels=["type:retro-try"], since={90 日前の ISO 8601 UTC})
+              → reopen 候補（`list_issues` の応答に `state_reason` は含まれないため、ここでは絞り込まず、
+                 類似ヒット時にだけ `mcp__github__issue_read(method="get")` で not_planned か確認する・reference.md F）
 ```
 
-- **3-A** 検索コマンド・類似判定の基準 → `reference.md` の F
+- `len(open_list)` **≥ 30（WIP 上限）→ 「追記のみモード」**: 3-A / 3-B（既存オープン Issue への追記）は通常どおり実行し、**3-C（新規 Issue 作成）と 3-B'（reopen）は実行しない**（どちらもオープン件数を増やすため）。類似 Issue が無かった Try、および TTL クローズ済み Issue に類似した Try は Issue を作らず・reopen せず、完了報告の「見送り Try（WIP 上限）」に必ず記録する（後者は「再発（TTL クローズ済み #N）」と明記。次回以降のレトロで再検出されれば、その時点の在庫次第で通常処理される。記録を残す限り「次回気をつける」禁止事項の対象外）
+- **`urgency:blocker` の Try は WIP ゲートの適用外**（在庫に関わらず 3-C / 3-B' を実行する。ブロッカーを在庫理由で握りつぶさない）
+- `len(open_list)` < 30 → 通常モード
+
+### Step 3-1: Try の採用と処理
+
+統合済みの Try を `high` → `medium` → `low` の順に並べ、各アイテムごとに:
+
+```
+Step 3-A: 既存 Issue との重複チェック（open_list → 一致なしなら closed_list〔not_planned・90 日〕）
+  ├── open に類似あり   → Step 3-B: 既存 Issue にコメント追記（再発検知）
+  ├── closed に類似あり → Step 3-B': reopen + 再発コメント（reference.md F の手順）
+  └── 類似なし          → Step 3-C: 新規 Issue を作成（下記の起票上限内のみ）
+```
+
+**起票上限**: 3-C（新規作成）と 3-B'（reopen）を合わせて **1 回のレトロにつき最大 3 件**（どちらもオープン在庫を 1 件増やすため同じ枠で数える。`urgency:blocker` は上限にカウントしない）。上限に達した後の Try は 3-C / 3-B' を行わず、完了報告の「見送り Try（起票上限）」に記録する。3-B（既存オープン Issue への追記）はオープン件数を増やさないため上限にカウントしない。
+
+- **3-A** 検索コマンド・類似判定の基準・reopen 手順 → `reference.md` の F
 - **3-B** コメント追記コマンド・再発検知テンプレート（3回超で priority:high へエスカレーション）→ `reference.md` の G
 - **3-C** `mcp__github__issue_write` の labels 構成（`sp:N` 写像必須）・本文テンプレート → `reference.md` の H
 
@@ -126,7 +148,9 @@ Step 3-A: 既存オープン Issue との重複チェック（type:retro-try を
 |------|---------|
 | 新規 Issue 作成 | Issue 番号・URL |
 | 既存 Issue へコメント追記 | 既存 Issue 番号・URL・「コメント追記」の旨 |
+| TTL クローズ済み Issue の reopen | Issue 番号・URL・「再発により reopen」の旨 |
 | 優先度エスカレーション実施 | 対象 Issue 番号・変更前後の priority |
+| 見送り Try | Try のタイトル・理由（起票上限 / WIP 上限）。**Issue 化しない代わりに必ず記録する** |
 
 ---
 
@@ -162,7 +186,9 @@ Slack 通知に失敗しても処理を中断しない（無音でスキップ�
 #### ⚠️ Problem（問題・改善が必要なこと）
 {役割別 Problem の一覧（箇条書き）}
 #### 🚀 Try（改善施策）→ Issue 化済み
-{Try の一覧（Issue #N リンク付き、コメント追記は「既存 Issue #N へ追記」と明記）}
+{Try の一覧（Issue #N リンク付き、コメント追記は「既存 Issue #N へ追記」、reopen は「#N を再発により reopen」と明記）}
+#### ⏸️ 見送り Try（起票上限 / WIP 上限・Issue 化せず記録のみ）
+{見送った Try のタイトルと理由。ゼロなら「なし」。WIP 上限中はオープン件数（N 件 / 上限 30 件）も併記}
 
 ### Try Issue 一覧取得
 mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])   # クラウド一次経路

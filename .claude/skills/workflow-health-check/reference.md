@@ -76,10 +76,13 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
      通知例: 「⚠️ waiting-user 重複 Issue を検出しました: {ID} {フェーズ名} が 2 件 → #{N1}, #{N2}」
   └─ 1 回の実行で通知するグループは最大 5 グループまで（サーキットブレーカー）
 
-5-d: スケジュール最適化提案（自動実行なし・レポートのみ）
-  └─ retro-try-handler の消化ペース（件/週）と生成ペース（件/週）を比較
-  └─ 生成 > 消化 × 1.5 → 「retro-try-handler の実行頻度を上げることを検討」とレポート
-  └─ 消化 > 生成 × 2 → 「実行頻度を下げてコスト削減可能」とレポート
+5-d: WIP ゲート適合性チェック（report-only・アクチュエータなし・#563）
+  └─ `type:retro-try` のオープン Issue を取得し、オープン件数 N と「直近 7 日以内に created_at がある件数」M を数える
+  └─ N ≥ 30（retrospective の WIP 上限・SSOT は docs/rules/retrospective-rules.md「WIP 制御」）かつ M > 3
+     → Warning: 「WIP ゲート（retrospective Step 3-0）が機能していない疑い。在庫 N 件のまま新規 Issue が週 M 件生成されている」
+  └─ 生成側（retrospective）の内部状態は参照しない（レーンをまたぐ暗黙状態共有を避け、GitHub 上の Issue 集合だけから独立に検査する）
+  └─ 旧「生成/消化ペース比較」は廃止（ゲート本体は retrospective 側にあり、頻度調整は下流のプロジェクト定義で決まるため
+     レポートしても実行者がいなかった）。TTL 出口（retro-try-handler Step 1.5）の作動状況は 5-a の消化率に反映される
 
 5-e: retro-try グローバル沈黙検出（完全版のみ・#397）
   └─ type:retro-try の Issue を open + closed 全件取得し、最新の created_at を求める
@@ -192,7 +195,7 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
 | オープン件数 | {N}件 | OK / Warning（30件超で Warning） |
 | 重複統合 | {N}グループ統合 | — |
 | パイプラインカバレッジ | 各パイプライン:{N}（プロジェクト定義） | OK / Warning（0件で Warning） |
-| 生成/消化バランス | 生成{N}件/週 vs 消化{N}件/週 | OK / 要調整 |
+| WIP ゲート適合性 | オープン{N}件 / 直近7日新規{M}件 | OK / Warning（N≥30 かつ M>3 で Warning・5-d） |
 | retro-try 最新生成からの経過 | {N}日 | OK / Warning（30日超で Warning・5-e） |
 | ルーティン生存（heartbeat） | {ルーティン名}: 最終発火 {N}時間前 | OK / Warning（cron 間隔の2倍超・停止・未作成で Warning・5-f） |
 

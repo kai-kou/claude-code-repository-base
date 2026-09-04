@@ -69,15 +69,11 @@ gh issue list -R __OWNER__/__REPO__ \
   ])'
 ```
 
-### doc-only Issue の月曜スキップルール
+### doc-only Issue の扱い
 
-`urgency:doc-only` のみが対象の場合、**月曜日のみ処理** する（火〜日はスキップ）。理由: `doc-only` は説明文修正のみで品質・プロセスに影響しないため、毎日処理する必要はなく月曜のまとめ処理で効率化する。
-
-```bash
-day_of_week=$(TZ=Asia/Tokyo LC_ALL=C date '+%A')
-# 月曜以外は urgency:doc-only のみの Issue をソート後の結果から除外する
-# 月曜は urgency:doc-only を含む全 Issue を対象にする
-```
+`urgency:doc-only` は曜日で絞らず毎日候補に含める（旧「月曜のみ処理」は「6/7 日は候補外・月曜も最下位競争で敗退」の
+二重スタベーションを生んでいたため廃止・#563）。段位 99 の最下位は維持し、選ばれた場合は同一カテゴリ `small` として
+D のバンドル PR にまとめる。深い在庫で選ばれ続けない doc-only は SKILL.md Step 1.5 の TTL が退出させる。
 
 ### 1-B: 更新系 Issue（プロジェクト定義の更新ラベル）
 
@@ -141,6 +137,11 @@ mcp__github__add_issue_comment(owner, repo, issue_number={N}, body="""
 mcp__github__issue_write(method="update", issue_number={N}, labels=[現在の全ラベル + "done_type:D-plan"])
 ```
 
+**再選出スキップ（#563）**: Step 1 のソート結果に `done_type:D-plan` 付きの Issue が含まれる場合、その Issue の
+最新コメントが本スキルの「実装計画」コメントであり、それ以降にコメント・ラベル変更がなければ **当該セッションでは
+選出しない**（同じ計画を再投稿して `updated_at` を更新し続けると Step 1.5 の TTL が永久に発火しないため）。
+新情報（人手コメント・再発検知コメント・priority 変更）が付いた large は通常どおり選出対象に戻す。
+
 ### C-5: tool-update カテゴリ（Claude Code / Anthropic SDK 新機能）
 
 Issue の「参照」セクションの URL を WebFetch/WebSearch で取得してから対応する。
@@ -184,7 +185,7 @@ API Deprecated（破壊的変更）         → 全ルールファイルを grep
 | 同一カテゴリ | `doc` + `doc`、`skill` + `skill` など（カテゴリをまたぐ場合は別 PR） |
 | 推定工数 | 全て `small`（`medium` 以上が1件でもあれば個別 PR） |
 | ファイル競合なし | 同一ファイルを複数 Issue が変更する場合は個別 PR |
-| Issue 数 | 2〜3件（1件は個別 PR、4件以上はカテゴリを分割して 2PR） |
+| Issue 数 | 2〜5件（1件は個別 PR、6件以上はカテゴリを分割して 2PR。PR レビュー往復は 1 本あたり固定費のため、上限拡大は処理上限の引き上げより費用対効果が高い・#563） |
 
 ### バンドル PR のコミットメッセージ形式
 
@@ -327,3 +328,31 @@ gh issue list -R __OWNER__/__REPO__ \
 gh issue list -R __OWNER__/__REPO__ \
   --label "type:retro-try" --search "[Retro][{pipeline}]" --limit 1000
 ```
+
+---
+
+## H. Step 1.5: TTL 自動クローズの判定式・テンプレート
+
+判定（全て AND。数値の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」）:
+
+```
+labels ∋ "status:waiting-claude"
+labels ∌ "urgency:blocker"
+now_utc − updated_at > 30 日        # 内部計算のため UTC 基準（datetime-rules.md の機械処理用 UTC 例外）
+```
+
+候補を `updated_at` 昇順（古い順）に並べ、先頭 **5 件** だけ処理する（残りは次回）。1 件ごとに:
+
+```
+mcp__github__issue_write(method="update", owner, repo, issue_number={N}, state="closed", state_reason="not_planned")
+mcp__github__add_issue_comment(owner, repo, issue_number={N}, body="""
+## TTL クローズ（not_planned）
+30 日間更新がないため、振り返りレーンの TTL 出口（retro-try-handler Step 1.5）でクローズしました。
+- 最終更新: {updated_at を JST で表記}
+- 同じ問題が再発した場合は、次回のレトロスペクティブ（retrospective reference.md F）が本 Issue を検出して reopen します
+""")
+```
+
+- `issue_write` が失敗したら当該 Issue はスキップして次へ進む（リトライは 1 回まで。失敗は Step 6 の完了サマリーに列挙する）
+- クローズ結果は Step 6 の完了サマリーに「TTL クローズ: #N, #M（最終更新 N 日前）」として記録する（サイレントに閉じない）
+- `state_reason` を `completed` にしない（`completed` は実装済みの意味で、消化率〔workflow-health-check 5-a〕を汚す）
