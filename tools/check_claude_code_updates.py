@@ -356,14 +356,21 @@ def collect_new_releases(cfg: dict, state: dict) -> list[dict]:
             breaking: list[dict] = []
             features: list[dict] = []
             others = 0
+            others_hinted: list[dict] = []
             for line in html_to_lines(entry.get("content", "")):
                 kind = classify_line(line, cfg)
+                hints = area_hints(line, cfg)
                 if kind == "breaking":
-                    breaking.append({"text": line, "areas": area_hints(line, cfg)})
+                    breaking.append({"text": line, "areas": hints})
                 elif kind == "feature":
-                    features.append({"text": line, "areas": area_hints(line, cfg)})
+                    features.append({"text": line, "areas": hints})
                 else:
                     others += 1
+                    # 辞書のキーワードに一致せず「その他」に落ちた行でも、影響領域ヒントに
+                    # 一致するものは棚卸し・精読の起点として残す（#561）。辞書の逐次追加は
+                    # いたちごっこになるため、拾えなかった行を消さずに次回の辞書拡充材料にする。
+                    if hints:
+                        others_hinted.append({"text": line, "areas": hints})
             releases.append({
                 "version": version,
                 "title": entry["title"],
@@ -372,6 +379,7 @@ def collect_new_releases(cfg: dict, state: dict) -> list[dict]:
                 "breaking": breaking,
                 "features": features,
                 "others_count": others,
+                "others_hinted": others_hinted,
                 "_dedup_keys": [eid, vkey],
             })
             for k in (eid, vkey):
@@ -490,6 +498,20 @@ def build_issue(releases: list[dict], kind: str, cfg: dict) -> tuple[str, str]:
     for r in releases:
         lines.append(f"### [{r['title']}]({r['link']})")
         lines.extend(_format_change_lines(r[changes_key]))
+        # breaking と feature が同一バージョンで両方立つ場合、others_hinted を両方の Issue に
+        # 丸ごと重複掲載すると二重トリアージになる（レビュー指摘・#561）。breaking Issue 側にのみ
+        # 掲載し、feature 側は参照だけ残す（breaking が無い＝feature 単独のバージョンでは通常どおり掲載）。
+        if r.get("others_hinted"):
+            if kind == "feature" and r.get("breaking"):
+                lines.append("")
+                lines.append("_（辞書未一致の「その他」ヒント行は同バージョンの破壊的変更 Issue 側に記載・重複回避）_")
+            else:
+                lines.append("")
+                lines.append("<details><summary>⚠️ 辞書には未一致だが影響領域ヒントに一致した「その他」の変更（要精読・#561）</summary>")
+                lines.append("")
+                lines.extend(_format_change_lines(r["others_hinted"]))
+                lines.append("")
+                lines.append("</details>")
         lines.append("")
     lines += texts["checklist"]
     lines += [
@@ -557,6 +579,23 @@ def self_test() -> int:
     assert classify_line("Fixed: the indicator no longer re-renders", cfg) == "other"
     assert classify_line("Fixed a breaking regression in hooks", cfg) == "breaking"
     assert "settings" in area_hints(lines[1], cfg), "area_hints(settings) 不検出"
+    # revert 同義語（#561・辞書の逐次追加はいたちごっこなので同義語群を先取り）
+    assert classify_line("Rolled back the permission change from 2.1.259", cfg) == "breaking"
+    assert classify_line("Restored the previous default for sandbox mode", cfg) == "breaking"
+    assert classify_line("Restored the prior timeout for hooks", cfg) == "breaking"
+    assert classify_line("Undid the change to hook timeout", cfg) == "breaking"
+    # 動詞原形は新機能紹介文と衝突するため辞書に採用しない（レビュー指摘・#561）
+    assert classify_line("Added an undo button to the diff viewer", cfg) != "breaking", (
+        "undo 単体一致は禁止（UI機能名との誤検知回避・#561）"
+    )
+    assert classify_line("Added the ability to roll back recent file edits", cfg) != "breaking", (
+        "roll back 単体一致は禁止（ロールバック機能の新機能紹介文との誤検知回避・#561）"
+    )
+    assert classify_line("You can now roll back a deployment from the command palette", cfg) != "breaking"
+    # 「その他」行でも影響領域ヒントは計算する（起票対象外の見落とし防止・#561）
+    other_line = "Tweaked internal telemetry for settings.json validation"
+    assert classify_line(other_line, cfg) == "other"
+    assert "settings" in area_hints(other_line, cfg), "other 行でも area_hints は計算されるべき"
     assert extract_version(entries[0]["title"]) == "9.9.9"
     assert parse_pubdate("2099-01-01T00:00:00Z") is not None
     assert parse_pubdate("") is None
@@ -587,6 +626,7 @@ def self_test() -> int:
     rel = {"version": "9.9.9", "title": "v9.9.9", "link": "https://example.com",
            "published": "", "breaking": [{"text": lines[0], "areas": []}],
            "features": [{"text": lines[1], "areas": ["settings"]}], "others_count": 1,
+           "others_hinted": [{"text": other_line, "areas": ["settings"]}],
            "_dedup_keys": [entries[0]["id"], _ver_key("anthropics/claude-code", "9.9.9")]}
     t1, b1 = build_issue([rel], "breaking", cfg)
     t2, b2 = build_issue([rel], "feature", cfg)
@@ -594,6 +634,21 @@ def self_test() -> int:
     assert "[CC-Sync][破壊的変更]" in t1 and "[CC-Sync][検証]" in t2
     assert _CCS_VER_MARKER_RE.search(b1).group(1) == "9.9.9#breaking"
     assert "即対応フロー" in b1 and "検証・検討チェックリスト" in b2
+    # 「その他」ヒント一致行が Issue 本文に精読対象として注記される（#561）。ただし breaking と
+    # feature が同一バージョンで両方立つ場合は breaking 側にのみ掲載し、feature 側には重複させない
+    # （二重トリアージ防止・レビュー指摘）
+    assert other_line in b1, "others_hinted が breaking Issue 本文に注記されていない"
+    assert "要精読" in b1
+    assert other_line not in b2, "breaking がある場合、feature Issue に others_hinted を重複掲載してはならない"
+    assert "破壊的変更 Issue 側に記載" in b2
+    # breaking が無い（feature 単独の）バージョンでは feature 側にそのまま掲載する
+    rel_feature_only = {**rel, "breaking": []}
+    _, b3 = build_issue([rel_feature_only], "feature", cfg)
+    assert other_line in b3 and "要精読" in b3, "feature 単独バージョンで others_hinted が欠落している"
+    # others_hinted が空リストのときは「要精読」セクションを出力しない
+    rel_no_hint = {**rel, "others_hinted": []}
+    _, b4 = build_issue([rel_no_hint], "breaking", cfg)
+    assert "要精読" not in b4, "others_hinted が空でも要精読セクションが出力されている"
     # repo 解決（本リポジトリ = プレースホルダ未置換でも git remote から導出できる）
     repo = resolve_repo_slug(cfg.get("issue", {}).get("repo", ""))
     assert repo and "/" in repo, f"repo 解決失敗: {repo!r}"
@@ -698,6 +753,14 @@ def main() -> int:
         # （「その他のみ」のバージョンだけ既知化する＝検知の覗き見で Issue が失われない）
         retry_eids.update(k for r in breaking_all for k in r["_dedup_keys"])
         retry_eids.update(k for r in feature_all for k in r["_dedup_keys"])
+
+    # 辞書には未一致だが影響領域ヒントに一致した「その他」行は、Issue 化されない
+    # バージョン（その他のみ）でも見落とさないよう必ずログへ残す（#561）
+    for r in releases:
+        if r.get("others_hinted"):
+            areas = sorted({a for h in r["others_hinted"] for a in h["areas"]})
+            print(f"[warn] v{r['version']}: 辞書未一致だが影響領域ヒント一致の「その他」行 "
+                  f"{len(r['others_hinted'])}件（areas={areas}）・要精読", file=sys.stderr)
 
     if retry_eids:
         state["known_ids"] = [i for i in state["known_ids"] if i not in retry_eids]

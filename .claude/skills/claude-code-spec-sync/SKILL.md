@@ -85,6 +85,10 @@ gh issue list --label "lane:claude-code-spec" --state open --json number,title,l
      再分類）は「これまでのやり方がエラーになる」典型。`tools/native_capabilities.json` の `native.routes` を
      突き合わせ、`python3 tools/native_fallback.py routes --json` の ladder が現行仕様と一致するか確認する
      （不一致なら台帳の `status` を更新し、閉じた経路は削除せず経緯を残す・`native-fallback-rules.md` §2.5・L-123）
+   - Issue 本文に **「⚠️ 辞書には未一致だが影響領域ヒントに一致した『その他』の変更（要精読）」** セクションが
+     あれば、各行を確認する。辞書に追加すべき言い換えパターンがあれば `config/claude_code_spec_sync.yaml` へ
+     追記し、追加不要と判断した場合もその理由を Issue コメントに残す（`others_hinted`・#561。ここを読み飛ばすと
+     「その他」行の見落としを後から発見できる形で残した意味が失われる）
 4. **対応**:
    - 影響あり → **最小差分で修正**（intent-gate 遵守・要求外リファクタ禁止）→ 検証
      （該当ツールの `--self-test`/`--dry-run`、フックは手動実行、settings は `claude config` 系で確認）
@@ -108,6 +112,8 @@ gh issue list --label "lane:claude-code-spec" --state open --json number,title,l
    - 公式 Docs / changelog 原文で仕様・前提条件・制約を確認
    - 本プロジェクトへの適用価値を評価 — 判断基準: **CP-5 貢献**（`docs/project-mission.md` への効果）/
      **CP-6 自律性向上**（ユーザー介入削減）/ **コスト**（トークン・時間・保守）/ **リスク**（退行・L-101 型の既知バグ）
+   - Issue 本文に「⚠️ 辞書には未一致だが影響領域ヒントに一致した『その他』の変更（要精読）」セクションが
+     あれば、Step 1 項目 3 と同じ要領で確認する（`others_hinted`・#561）
 3. **判定**（3択）:
    - **採用** → rules/skills/hooks/settings へ反映（最小差分）+
      `docs/rules/claude-code-optimization.md` へ記録 → PR → L1 レビュー → マージ → Issue クローズ

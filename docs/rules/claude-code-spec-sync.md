@@ -51,6 +51,25 @@ tools/check_claude_code_updates.py --create-issue   ← 検知（LLM 非依存�
   分類結果に関わらず実行）。v2.1.260 の "Reverted the 2.1.259 change applying Read() deny rules to Bash arguments" 行は
   どの辞書にも一致せず「その他」に落ちて影響なしと記録された（#558）。辞書の追加はいたちごっこになるため、
   権限・deny・Bash 引数の領域は実測で検知する
+- **役割分担（#561・棚卸し結果）**: 「辞書でしか拾えない領域」と「実測プローブで補完できる領域」を切り分ける。
+  - 実測プローブで補完できる領域（権限・deny・Bash 引数など、`tools/probe_permission_prompts.sh` が実行して
+    挙動を直接観測できるもの）は、辞書の同義語を無限に追加し続けない。プローブの検知結果を正とする。
+  - 辞書でしか拾えない領域（プローブが存在しない仕様変更全般。UI 文言・設定キー名の変更・非権限系の
+    挙動変更等）は、**revert 系の同義語をまとめて先取りする** ことで取りこぼしを減らす。
+    `breaking_keywords` に "revert" だけでなく `rolled back` / `restored the previous` /
+    `restored the prior` / `undid the` を追加済み（v2.1.260 の "Reverted ..." 行を教訓に、動詞の
+    言い換えパターンを一括収録）。**動詞原形（"undo" / "roll back" / "rolling back"）は追加しない**
+    （undo/redo・rollback は UI 機能の一般名詞でもあり、「Added an undo button」「Added the ability to
+    roll back recent edits」のような新機能紹介文と衝突して誤検知率が上がるため、過去形・受動態の
+    フレーズ限定にとどめる。レビューで実際に "roll back" が誤検知することを確認済み）。
+  - **「その他」に分類された行も、辞書には未一致でも `project_area_hints` に一致すれば
+    `others_hinted` として保持し、起票される Issue 本文に「⚠️ 要精読」セクションで注記する**
+    （`tools/check_claude_code_updates.py` の `others_hinted`。起票されない「その他のみ」バージョンでも
+    stderr へ警告ログを残す）。分類（起票するかどうか）には使わない＝取りこぼし側に倒す方針は変えず、
+    見落としを **後から発見できる形で残す** ことが目的（以前は `others_count` の数だけが残り、
+    どの行が見落とされたか追跡できなかった）。同一バージョンが breaking と feature の両方を持つ場合は
+    `others_hinted` を breaking Issue 側にのみ掲載し、feature Issue 側は参照だけ残す（両方に丸ごと
+    重複掲載すると二重にトリアージすることになるため）。
 - 例外: 「Fixed ...」で始まる行はバグ修正のため、明示的に "breaking" を含まない限り「その他」へ
   デモートする（"no longer" / "removed" を本文に含むだけの修正行の誤検知が多いため・2026-07-17 実測）
 - 🔴 **記録の「N件」＝ツールが breaking 判定した件数**（CHANGELOG 全行の精読ではない）。v2.1.257 で

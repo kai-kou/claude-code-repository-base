@@ -229,5 +229,21 @@ if _sensitive_file_access; then
 デグレ検証: bash tools/test_sensitive_file_guard.sh"
 fi
 
+# 承認プロンプトに落ちる Bash を、プロンプトになる前に差し戻す（無人ルーティンの無限停止防止・#578）
+#
+# クラウド実行環境には bwrap / sandbox-exec が無く（実測: MISSING・Seccomp 0）、settings.json の
+# sandbox.enabled は起動できない。そのため「作業ディレクトリ・セッション一時領域の外への書き込み /
+# 削除」は auto モードの classifier が自動承認せず、無人セッションでは承認待ちのまま停止する。
+# ここでブロックすると Claude にはツール失敗として返るため、代替経路へ自己修正できる。
+if _wwg_reason=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/lib/workspace_write_guard.py" 2>/dev/null); then
+  :
+else
+  _wwg_status=$?
+  if [ "$_wwg_status" -eq 1 ] && [ -n "$_wwg_reason" ]; then
+    hook_block "$_wwg_reason
+デグレ検証: bash tools/test_workspace_write_guard.sh"
+  fi
+fi
+
 # 該当なし: 許可
 exit 0

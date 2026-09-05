@@ -87,3 +87,55 @@
 **保持理由**: 「2 層あるから安全」という思い込みが、実際には片方が死んでいる非対称を見逃す典型例。
 allow/deny の評価順とレイヤー適用範囲（Bash 限定 vs 全ツール）は他の機密ファイルガードにも波及する
 恒久的な設計制約のため、Warm 層に常駐させる。
+
+---
+
+## L-129: 無人ルーティンが「作業領域の外を触る Bash」の承認プロンプトで無限停止する（2026-09-05・#578）
+
+**症状**: scheduled trigger（無人ルーティン）のセッションが承認プロンプトを出したまま数時間停止する。誰も承認しないため、ルーティンはその回の処理を一切終えられない。下流 blog-dispatch ルーティンで観測された 2 例（いずれも Bash ツール）:
+
+| # | コマンド（要約） | プロンプトの表示 |
+|---|----------------|----------------|
+| 1 | `WORK=/tmp/skill-doctor-demo; rm -rf $WORK; mkdir -p $WORK/.claude; cp -r <repo>/.claude/skills $WORK/...` | `Prepare isolated skill-doctor demo dir` の run 許可 |
+| 2 | セッション scratchpad を作ったうえで、ホーム配下 `~/.claude/projects/<project>/<session>/tool-results/<id>.txt` を `cp` してから `python3 -c` で解析 | `Claude requested permissions to edit ~/.claude/projects/...` |
+
+**根本原因（実測で確定・3 層）**
+
+1. **クラウド実行環境では Bash サンドボックスが起動できない**。実測: `command -v bwrap` = MISSING / `command -v sandbox-exec` = MISSING / `/proc/self/status` の `Seccomp: 0`。したがって `.claude/settings.json` の `sandbox.enabled: true`・`autoAllowBashIfSandboxed: true` はクラウドでは **無効**（ローカル専用の設定）。公式仕様上サンドボックスが既定で書き込みを許すのは「作業ディレクトリ / セッション一時ディレクトリ / `additionalDirectories`」で、その外は "Blocked access: cannot modify files outside ... without explicit permission" と明記されている。
+2. **サンドボックスが無い以上、Bash の可否は `permissions.*` の静的ルールと auto モードの classifier だけで決まる**。`permissions.allow` に `mkdir` / `cp` / `rm` / リダイレクト書き込みは無く（危険なので載せるべきでもない）、classifier は作業ツリー外への書き込み・削除を自動承認しない。headless プローブ（`claude -p --permission-mode auto`）で実測: 作業ツリー外への `mkdir` + リダイレクト書き込み・`rm -rf` は `permission_denials` に記録される（= 対話なら承認プロンプト）。作業ディレクトリ内・セッション scratchpad 配下は記録されない。
+3. **`PermissionRequest` フックの自動承認が Bash に効いていなかった**。`permission-request-auto-allow.sh` はホーム配下を含む `.claude` パスを自動承認するが、`settings.json` の matcher が `Read|Write|Edit|NotebookEdit` のため **Bash 経由のアクセスは射程外**。一方 auto モードのシステムプロンプトは「できる仕事は Bash で行え」と指示するため、ネイティブツールなら通る操作が Bash 経由だとプロンプトになる **非対称** が生まれていた（例 2 がこれ）。
+
+**対策（採用）**
+
+- **ハーネス（機械強制）**: `.claude/hooks/lib/workspace_write_guard.py` を `pre-tool-use-router.sh` から呼び、① 作業ディレクトリ・セッション一時領域の外への書き込み / 削除、② ホーム配下の `.claude` 領域への Bash アクセス、を **プロンプトになる前に exit 2 で差し戻す**。ブロックはツール失敗として Claude に返るため、無人セッションでも停止せず代替経路へ自己修正できる（承認待ちは「見える停止」ですらなく、無人では誰にも見えない）。判定はシェルの実挙動に寄せてある（Layer 1 セルフレビューで実測された取りこぼしを全て塞いだ結果）:
+
+  | 解析上の論点 | 扱い |
+  |---|---|
+  | セグメント分割 | クォートを尊重した shlex トークン化（`punctuation_chars`）。生文字列を正規表現で割ると、クォート内に `&` を含む URL 引数などでコマンドが分断され解析が丸ごと落ちる |
+  | 変数経由のパス | 同一コマンド文字列内の `NAME=value` を展開する（例 1 の捕捉に必須） |
+  | heredoc | 本文は解析対象から除く（文書中の例示パスでの誤ブロック防止・導入直後に実発生）。同一行の複数 heredoc に対応し、**終端が見つからないときは読み飛ばした行を解析対象へ戻す**（fail-open だと終端漏れ以降の実コマンドが不可視になる） |
+  | 書き込み先の抽出 | 位置引数だけでなく `-t DIR` / `--target-directory=DIR`、`curl -o` / `--output-dir`、`wget -O` / `-P`、`sed -i` の対象、`dd of=`、fd 付き・noclobber リダイレクト（`2>` / `&>` / `>|`）を対象にする |
+  | 擬似デバイス | `/dev/` 配下と `/proc/<pid>/fd/` は書き込み対象から除く（`2>` で捨てる定型が止まる。導入直後に実発生） |
+  | 前置きコマンド | `sudo` / `env` / `nice` / `timeout` 等のラッパーを 1 段読み飛ばしてから実コマンドを判定する |
+  | `cd` の効果 | セグメントをまたいで基点を引き継ぐ（作業ツリー外へ移動してからの相対パス削除を取りこぼさない）。解決できない `cd` 先の後は相対パスを判定不能として素通りさせる |
+  | セッション一時領域 | `/tmp/claude-<N>/<project>/<session-id>/` を **session_id まで一致** させる。緩いプレフィックス一致だと他セッションの scratchpad の削除まで安全扱いになる |
+  | symlink | `realpath` で解決してから判定する（作業ツリー内のリンクが外を指すケース） |
+
+  回帰テストは `bash tools/test_workspace_write_guard.sh`（39 ケース）と、ガード単体の `python3 .claude/hooks/lib/workspace_write_guard.py --self-test`。機密ファイルガードの回帰テストは同じ router を通すため、本ガードをトグルで切って走らせる（検証したい機密判定が別ガードのブロックでマスクされるのを防ぐ）。
+
+  **読み取りまでブロックする根拠**（レビュー指摘への回答）: ホーム配下 `.claude` は書き込みだけでなく **読み取りもプロンプトになる**。headless プローブで `cat <ホーム配下 .claude のファイル> | head -3` と `grep -c . <同>` を投入したところ、両方とも `permission_denials` に記録された（拒否理由の文面も "tries to read a file outside the allowed working directory"）。ただしこの実測ラボは `permissions.allow` を持たないため、本ベースの `Bash(cat:*)` / `Bash(grep:*)` が allow 側で先に決着する可能性は残る（未確認）。**無人停止のコスト（誰も承認せず無限待ち）と代替のコスト（ネイティブ Read / Grep へ切り替える 1 往復）が非対称** なので、読み取りもブロック側に倒している。
+- **行動規範**: 一時作業はセッション scratchpad（システムプロンプトが提示するパス）かリポジトリ内で行う。ツール結果の persisted output（ホーム配下 `.claude/projects/.../tool-results/`）は **ネイティブ Read / Grep で読む**（`PermissionRequest` フックが自動承認する）。Bash で複製しない。
+
+**採らなかった案と理由**
+
+| 案 | 不採用の理由 |
+|----|------------|
+| `PermissionRequest` の matcher に `Bash` を足して自動承認する | `PermissionRequest` は公式仕様上 Bash でも発火するが、任意の Bash を自動承認するのは実質 `bypassPermissions` と同じで、承認レイヤーそのものを無効化する |
+| `permissions.allow` に `Bash(mkdir:*)` / `Bash(cp:*)` / `Bash(rm:*)` を足す | allow はコマンド名前方一致でパスを制御できず、作業ツリー外への破壊的操作まで一律に許してしまう。複合コマンドは各サブコマンドが個別に allow 一致する必要があるため、破壊的コマンドが混ざれば結局止まる |
+| `sandbox.filesystem.allowWrite` で外部パスを許可する | クラウドではサンドボックス自体が起動しない（根本原因 1）ため効果ゼロ。ローカルでも「作業ツリー外に書く」運用を追認することになる |
+
+**残余リスク（ハーネスで塞げない部分）**: `python3 -c` のような任意コード経由の外部書き込みは字面から判定できない（`pre-tool-use-router.sh` の機密ファイルガードと同じ限界）。また classifier の判断はモデル・バージョン依存でぶれるため、ガードが想定しない別種のコマンドが承認プロンプトに落ちる可能性は残る。ルーティン自体の permission mode（`create_trigger` の `permission_mode`）を緩めるのは承認レイヤーを外す判断であり、ハーネス側からは行わない。
+
+**判定基準**: 「このコマンドが書き込む / 消す先は、作業ディレクトリかセッション scratchpad の中か？」→ No なら、無人セッションでは承認待ちで止まると考える。
+
+**保持理由**: 無人ルーティンの無限停止は「失敗せずに何も進まない」最も気づきにくい停止形態で、クラウド運用のあるプロジェクト全てで再発しうる。サンドボックス設定がクラウドで無効という前提も、設定を読んだだけでは分からず繰り返し誤解される。

@@ -12,13 +12,17 @@ SYNC_PATHS 配下のファイルへ加えた変更（.claude/settings.json の�
 下流のセッションが起動不能になる／ルールファイルがマーカー付きのまま規範として読まれる、
 という失敗モードを構造的に排除する）。
 
-検証は 3 段:
+検証は 4 段:
   1. 衝突マーカー（<<<<<<< / ======= / >>>>>>>）が残っていないこと
   2. JSON なら構文が妥当であること
   3. JSON なら **重複キーが無いこと**
+  4. JSON かつ ORDER_SENSITIVE_ARRAY_PATHS 対象なら **順序依存配列の相対順序が両側とも未決定でないこと**
 3 が要るのは、同一階層の別位置に両側が同名キーを追加すると merge-file が衝突なしと判定し、
 構文的にも妥当な「重複キー JSON」が生成されるため。この JSON はパース時に片方の値が
 サイレントに消える（Python は最後の出現が勝つ）。構文検証だけでは検出できない。
+4 が要るのは、`hooks.PreToolUse` のように要素順が実行順序を意味する配列で、両側が別位置に
+新規エントリを挿入すると行としては非重複（=衝突なし・構文妥当）になるため。マージ後の
+相対順序はどちらの入力も決めていない、たまたま生成された並びに過ぎない。
 
 終了コード:
   0 … クリーンにマージでき検証も通った（--output へ書き出し済み）
@@ -43,6 +47,15 @@ from pathlib import Path
 CONFLICT_PREFIXES = ("<<<<<<< ", ">>>>>>> ")
 JSON_SUFFIXES = {".json"}
 YAML_SUFFIXES = {".yaml", ".yml"}
+
+# 要素順が実行順序を意味するため、両側が別位置に新規追加した要素が混在すると
+# どちらの入力も相対順序を決めていない「未決定な順序」が生まれるフィールド。
+# ファイル名（basename）→ (親キー, 子キー) のタプルで列挙する。子キーが "*" なら
+# 親オブジェクトの全キーに一致する（例: hooks.PreToolUse / hooks.PostToolUse ...）。
+# permissions.allow のような「順序に意味の無い配列」はここに列挙しない限り対象外。
+ORDER_SENSITIVE_ARRAY_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
+    "settings.json": (("hooks", "*"),),
+}
 
 
 class ValidationError(Exception):
@@ -95,6 +108,97 @@ def _validate_yaml(text: str) -> None:
         raise ValidationError(f"YAML 構文エラー: {exc}") from exc
 
 
+def _canon(item: object) -> str:
+    """配列要素の同一性比較用に正規化する（キー順序の違いを無視する）。"""
+    return json.dumps(item, sort_keys=True, ensure_ascii=False)
+
+
+def _order_sensitive_arrays(doc: object, path_spec: tuple[tuple[str, str], ...]) -> dict[str, list]:
+    """path_spec に一致する配列を {"親キー.子キー": [...]} で返す（一致しなければ空）。"""
+    arrays: dict[str, list] = {}
+    if not isinstance(doc, dict):
+        return arrays
+    for parent_key, child_key in path_spec:
+        parent = doc.get(parent_key)
+        if not isinstance(parent, dict):
+            continue
+        children = parent.items() if child_key == "*" else [(child_key, parent.get(child_key))]
+        for key, value in children:
+            if isinstance(value, list):
+                arrays[f"{parent_key}.{key}"] = value
+    return arrays
+
+
+def _detect_order_ambiguity(
+    base_arrays: dict[str, list],
+    ours_arrays: dict[str, list],
+    theirs_arrays: dict[str, list],
+    merged_arrays: dict[str, list],
+) -> list[str]:
+    """ours・theirs がそれぞれ別の新規要素を同一配列に追加した場合、そのパスを返す。
+
+    どちらの入力も「自分が追加した要素」と「相手が追加した要素」の相対順序を
+    レビューしていないため、テキストマージがたまたま生成した並び順を採用しない。
+    """
+    ambiguous: list[str] = []
+    for path, merged_list in merged_arrays.items():
+        base_canon = {_canon(e) for e in base_arrays.get(path, [])}
+        ours_added = {_canon(e) for e in ours_arrays.get(path, []) if _canon(e) not in base_canon}
+        theirs_added = {_canon(e) for e in theirs_arrays.get(path, []) if _canon(e) not in base_canon}
+        ours_only = ours_added - theirs_added
+        theirs_only = theirs_added - ours_added
+        if not ours_only or not theirs_only:
+            continue
+        merged_canon = {_canon(e) for e in merged_list}
+        if (ours_only & merged_canon) and (theirs_only & merged_canon):
+            ambiguous.append(path)
+    return ambiguous
+
+
+def _load_json_or_none(path: Path) -> object | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def check_order_sensitive_arrays(
+    ours: Path, base: Path, theirs: Path, merged_text: str, path_hint: Path
+) -> None:
+    """順序依存配列（ORDER_SENSITIVE_ARRAY_PATHS）に未決定な相対順序が無いか検証する。
+
+    検出したら ValidationError を投げ、呼び出し側の既存の衝突処理（下流を温存し
+    <path>.base-latest を併置）にそのまま合流させる。
+    """
+    path_spec = ORDER_SENSITIVE_ARRAY_PATHS.get(path_hint.name)
+    if not path_spec:
+        return
+    base_doc = _load_json_or_none(base)
+    ours_doc = _load_json_or_none(ours)
+    theirs_doc = _load_json_or_none(theirs)
+    if base_doc is None or ours_doc is None or theirs_doc is None:
+        # 入力側が JSON として読めない＝この関数の前提が成立しないため、
+        # 「疑わしければ採用しない」という本モジュール全体の方針に合わせて拒否する
+        # （黙ってチェックを飛ばして未検証のまま採用しない）。
+        raise ValidationError(
+            f"{path_hint.name} の入力（ours/base/theirs のいずれか）が JSON として読めないため、"
+            "順序依存配列チェックを実施できない"
+        )
+    # merged_text は validate() が同じ suffix 条件で既に json.loads() を通しているため、
+    # ここでの再パースが JSONDecodeError を投げることはない。
+    merged_doc = json.loads(merged_text)
+    ambiguous = _detect_order_ambiguity(
+        _order_sensitive_arrays(base_doc, path_spec),
+        _order_sensitive_arrays(ours_doc, path_spec),
+        _order_sensitive_arrays(theirs_doc, path_spec),
+        _order_sensitive_arrays(merged_doc, path_spec),
+    )
+    if ambiguous:
+        raise ValidationError(
+            "順序依存配列の相対順序が双方未決定: " + ", ".join(sorted(ambiguous))
+        )
+
+
 def validate(text: str, path_hint: Path) -> None:
     """採用可否を判定する。問題があれば ValidationError を投げる。"""
     for line in text.splitlines():
@@ -135,6 +239,8 @@ def merge(ours: Path, base: Path, theirs: Path, path_hint: Path) -> bytes:
         # バイナリ・非 UTF-8 は行ベースのマージ結果を検証できないので採用しない
         raise ValidationError("UTF-8 として読めないためマージ結果を採用しない")
     validate(text, path_hint)
+    if path_hint.suffix.lower() in JSON_SUFFIXES:
+        check_order_sensitive_arrays(ours, base, theirs, text, path_hint)
     return proc.stdout
 
 
@@ -269,6 +375,64 @@ def _self_test() -> int:
         check("実行可能ファイルのマージが成功する", rc == 0)
         if rc == 0:
             check("実行権限が引き継がれる", bool(sh_out.stat().st_mode & _stat.S_IXUSR))
+
+        # 11. settings.json の hooks.* に両側が別位置へ新規エントリを挿入すると、
+        #     行としては非重複（クリーンマージ）でも相対順序が未決定として拒否される。
+        #     本チェック（check_order_sensitive_arrays）を呼ばなければ、この anc11/ours11/theirs11 は
+        #     git merge-file 単体で EXIT=0（クリーン）と判定され、validate() の衝突マーカー・JSON構文・
+        #     重複キー検証もすべて通ってしまう（#507 の再現ケース）。
+        def hooks_doc(entries: list[str]) -> str:
+            items = ",\n      ".join(
+                f'{{"matcher": "{m}", "hooks": [{{"type": "command", "command": "{m}.sh"}}]}}'
+                for m in entries
+            )
+            return f'{{\n  "hooks": {{\n    "PreToolUse": [\n      {items}\n    ]\n  }}\n}}\n'
+
+        anc11 = write("anc11.json", hooks_doc(["A", "B", "C"]))
+        ours11 = write("ours11.json", hooks_doc(["A", "X", "B", "C"]))
+        theirs11 = write("theirs11.json", hooks_doc(["A", "B", "C", "Y"]))
+        try:
+            merge(ours11, anc11, theirs11, Path("settings.json"))
+            failures.append("順序依存配列（hooks.PreToolUse）の未決定な相対順序を検出できない")
+        except ValidationError as exc:
+            check("hooks.PreToolUse が理由に含まれる", "hooks.PreToolUse" in str(exc))
+
+        # 12. 同じ挿入パターンでも順序に意味の無い配列（permissions.allow 等）は対象外
+        def perms_doc(entries: list[str]) -> str:
+            items = ",\n      ".join(f'"{e}"' for e in entries)
+            return f'{{\n  "permissions": {{\n    "allow": [\n      {items}\n    ]\n  }}\n}}\n'
+
+        anc12 = write("anc12.json", perms_doc(["Bash(ls)", "Bash(pwd)", "Bash(whoami)"]))
+        ours12 = write("ours12.json", perms_doc(["Bash(ls)", "Bash(git status)", "Bash(pwd)", "Bash(whoami)"]))
+        theirs12 = write("theirs12.json", perms_doc(["Bash(ls)", "Bash(pwd)", "Bash(whoami)", "Bash(echo hi)"]))
+        try:
+            merged12 = merge(ours12, anc12, theirs12, Path("settings.json")).decode("utf-8")
+            check("permissions.allow は順序依存扱いにならない", "Bash(git status)" in merged12 and "Bash(echo hi)" in merged12)
+        except ValidationError as exc:
+            failures.append(f"順序に意味の無い配列を過剰に要確認へ倒した: {exc}")
+
+        # 13. hooks.* のワイルドカードは複数イベント名に一致するが、
+        #     別々のイベント配列をそれぞれ片側だけが変更した場合はキーをまたいで誤検知しない
+        def multi_event_doc(pre_entries: list[str], post_entries: list[str]) -> str:
+            def block(name: str, entries: list[str]) -> str:
+                items = ",\n      ".join(f'"{e}"' for e in entries)
+                return f'    "{name}": [\n      {items}\n    ]'
+
+            return (
+                "{\n  \"hooks\": {\n"
+                + block("PreToolUse", pre_entries)
+                + ",\n"
+                + block("PostToolUse", post_entries)
+                + "\n  }\n}\n"
+            )
+
+        anc13 = write("anc13.json", multi_event_doc(["A", "B"], ["P", "Q"]))
+        ours13 = write("ours13.json", multi_event_doc(["A", "X", "B"], ["P", "Q"]))
+        theirs13 = write("theirs13.json", multi_event_doc(["A", "B"], ["P", "Q", "Z"]))
+        try:
+            merge(ours13, anc13, theirs13, Path("settings.json"))
+        except ValidationError as exc:
+            failures.append(f"別イベント名を別側が独立に変更しただけなのに誤検知した: {exc}")
 
     if failures:
         for f in failures:

@@ -8,6 +8,13 @@
 #
 # 期待: BLOCK ケースは exit != 0、ALLOW ケースは exit 0
 HOOK="$(cd "$(dirname "$0")/.." && pwd)/.claude/hooks/pre-tool-use-router.sh"
+
+# 本テストは router 全体を通すが、検証したいのは機密ファイルガードだけである。
+# 同じ router に後段で走る作業領域ガード（workspace_write_guard.py・#578）が
+# 「cwd 外への書き込み」を別理由でブロックすると、機密判定の ALLOW / BLOCK が
+# マスクされて検証意図が測れなくなる（curl -o /tmp/... 系のケースが該当）。
+# トグルで後段だけ切り、固定値（宛先パス）は機密判定の意図どおりのまま維持する。
+export CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1
 pass=0; fail=0
 
 run() {

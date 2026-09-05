@@ -46,6 +46,14 @@ breaking_keywords:
   - "will be removed"
   - "to be ignored"       # 「これまで有効だった設定/挙動が今後は無視される」型（v2.1.257 #548 で取りこぼし発覚）
   - "revert"              # 「前バージョンの変更を打ち消した」型。挙動が戻る＝既存の回避策・lesson が陳腐化する（v2.1.260 の deny 適用 revert を取りこぼし・#558）
+  # revert の同義語（#561・辞書の逐次追加はいたちごっこなので同義語群をまとめて先取りする）。
+  # 過去形・受動態のフレーズに限定する: 動詞原形の "roll back" / "rolling back" / "undo" は
+  # 「ロールバック機能」「undo/redo 機能」の新機能紹介文（例:「Added the ability to roll back edits」）
+  # と衝突し誤検知率が高いため、いずれも採用しない（レビュー指摘・#561）。
+  - "rolled back"
+  - "restored the previous"
+  - "restored the prior"
+  - "undid the"
 
 # 新機能・新設定キーワード（「検証・検討」分類。breaking が優先）
 feature_keywords:
