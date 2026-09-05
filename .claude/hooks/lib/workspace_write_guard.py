@@ -23,7 +23,10 @@
     同一コマンド内の `NAME=value` 代入は解決する）
   - 目的は「無人セッションの停止防止」であって権限の代替ではない。`permissions.deny` の保護とは独立
 
-トグル: `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` で無効化する。
+トグル: `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` で無効化する。セッションの環境変数としても、
+Bash コマンドの先頭に置く前置き代入としても効く（フックはプロセスの環境変数しか見ないため、
+前置き代入はコマンド文字列から検出する）。heredoc 本文中の記述は無効（文書にこの語を書いただけで
+ガードが外れるのを防ぐ）。承認レイヤーの代替ではないので、明示的に外す判断自体は設計意図どおり。
 
 入出力:
   stdin  : PreToolUse フックの JSON（`tool_input.command` / `cwd` / `session_id` を読む）
@@ -70,6 +73,8 @@ _HEREDOC_START = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 _ASSIGNMENT = re.compile(r"(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|)]+)")
 # 未解決の変数参照
 _UNRESOLVED_VAR = re.compile(r"\$\{?[A-Za-z_(]")
+# 脱出ハッチの環境変数名（セッション env / コマンド先頭の前置き代入のどちらでも効く）
+_TOGGLE_NAME = "CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD"
 
 
 def _strip_heredocs(command: str) -> str:
@@ -122,6 +127,27 @@ def _expand_assignments(command: str) -> str:
     for name in sorted(values, key=len, reverse=True):
         expanded = expanded.replace(f"${{{name}}}", values[name]).replace(f"${name}", values[name])
     return expanded
+
+
+def _toggle_in_segment(tokens: list[str]) -> bool:
+    """このセグメントが `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 cmd` 形式で外されているか。
+
+    フックが見るのは Claude Code プロセスの環境変数なので、Bash コマンド文字列に置いた前置き代入は
+    `os.environ` に現れない。ブロックメッセージが案内する外し方が実際には効かず、
+    正当な作業（設計上リポジトリ外に置かれる成果物の後始末など）が進められなくなっていた（#582）。
+
+    判定は **セグメント先頭から連続する代入トークン** に限る。コマンド文字列のどこにトグル名が
+    現れても外れる実装だと、`echo "…TOGGLE=1…" && rm -rf /外` や、コミットメッセージ・説明文に
+    この語が入っただけでガードが丸ごと無効化される（シェルの `VAR=1 cmd` の意味論とも食い違う）。
+    適用範囲もそのセグメントに閉じる（`TOGGLE=1 rm -f /外/marker && rm -rf /外/other` の後段は検査する）。
+    """
+    for token in tokens:
+        if "=" not in token or token.startswith("-") or token.startswith("/"):
+            return False  # 代入以外が現れたら前置き部分は終わり
+        name, _, value = token.partition("=")
+        if name == _TOGGLE_NAME and value == "1":
+            return True
+    return False
 
 
 def _tokenize_line(line: str) -> list[str]:
@@ -315,6 +341,9 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
         )
 
     for tokens in _segments(expanded):
+        if _toggle_in_segment(tokens):
+            continue  # このセグメントだけ明示的に外されている（#582・#583）
+
         # (1) ホーム配下の Claude 領域への Bash アクセス（読み書き問わず）
         for token in _path_like(tokens):
             resolved = _resolve(token, current_cwd, home)
@@ -382,6 +411,13 @@ def _self_test() -> int:
         (False, 'some-check 2>/dev/null | head -3'),
         (False, 'echo hi > /dev/null'),
         (False, 'dd if=/dev/zero of=/dev/null bs=1M count=1'),
+        (False, 'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f /tmp/demo-out/marker'),
+        (True, 'rm -rf /tmp/demo-out; CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 echo done'),
+        (True, 'echo "CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1" && rm -rf /tmp/demo-out'),
+        (True, 'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f /tmp/demo-out/marker && rm -rf /tmp/demo-out/other'),
+        (True, 'rm -rf /tmp/demo-out # CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1'),
+        (True, 'rm -rf /tmp/demo-out\necho x\nCLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 true'),
+        (True, 'cat > docs/n.md <<EOF\nCLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 と書く\nEOF\nrm -rf /tmp/demo-out'),
     ]
     failures = 0
     for expect_block, command in cases:

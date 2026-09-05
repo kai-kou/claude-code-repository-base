@@ -93,6 +93,27 @@ run_case ALLOW "curl -O（出力先は cwd）" 'curl -O https://example.com/a.bi
 run_case ALLOW "/dev/null へのリダイレクト（誤ブロック防止・導入直後に実発生）" 'some-check 2>/dev/null | head -3'
 run_case ALLOW "/dev/null を宛先にする dd" 'dd if=/dev/zero of=/dev/null bs=1M count=1'
 
+run_case ALLOW "コマンド先頭の前置きトグル（#582・案内文どおりの外し方）" \
+  'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f /tmp/demo-out/marker'
+run_case BLOCK "トグル名が後続セグメントに現れてもガードは外れない" \
+  'rm -rf /tmp/demo-out; CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 echo done'
+run_case BLOCK "トグル名が引数の文字列に現れてもガードは外れない" \
+  'echo "CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1" && rm -rf /tmp/demo-out'
+run_case BLOCK "トグルの適用範囲はそのセグメントに閉じる（後段は検査する）" \
+  'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f /tmp/demo-out/marker && rm -rf /tmp/demo-out/other'
+run_case BLOCK "heredoc 本文にトグル名があってもガードは外れない" \
+  'cat > docs/n.md <<EOF
+CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 と書く
+EOF
+rm -rf /tmp/demo-out'
+
+run_case BLOCK "シェルコメント内のトグル名では外れない" \
+  'rm -rf /tmp/demo-out # CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1'
+run_case BLOCK "複数行コマンドの後方行のトグルは前の行に及ばない" \
+  'rm -rf /tmp/demo-out
+echo x
+CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 true'
+
 echo "[test] トグルによる無効化"
 toggle_out=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"rm -rf /tmp/demo-out"}}))' "$TEST_CWD" \
   | HOME="$TEST_HOME" CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 python3 "$GUARD" 2>&1)
