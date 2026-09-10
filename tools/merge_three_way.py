@@ -50,11 +50,16 @@ YAML_SUFFIXES = {".yaml", ".yml"}
 
 # 要素順が実行順序を意味するため、両側が別位置に新規追加した要素が混在すると
 # どちらの入力も相対順序を決めていない「未決定な順序」が生まれるフィールド。
-# ファイル名（basename）→ (親キー, 子キー) のタプルで列挙する。子キーが "*" なら
-# 親オブジェクトの全キーに一致する（例: hooks.PreToolUse / hooks.PostToolUse ...）。
+# リポジトリルートからの相対パス（apply-to-repo.sh が --path-hint に渡す $rel と同じ形式）
+# → (親キー, 子キー) のタプルで列挙する。子キーが "*" なら親オブジェクトの全キーに一致する
+# （例: hooks.PreToolUse / hooks.PostToolUse ...）。
 # permissions.allow のような「順序に意味の無い配列」はここに列挙しない限り対象外。
+#
+# 🔴 basename ではなく相対パスをキーにする（Issue #50）: 以前は basename "settings.json" だけで
+# 一致させていたため、同じ basename を持つ下流の別ファイル（例: .vscode/settings.json）まで
+# 本チェックの対象になり、hooks 配下に配列を持つだけで誤ってマージを拒否するリスクがあった。
 ORDER_SENSITIVE_ARRAY_PATHS: dict[str, tuple[tuple[str, str], ...]] = {
-    "settings.json": (("hooks", "*"),),
+    ".claude/settings.json": (("hooks", "*"),),
 }
 
 
@@ -170,7 +175,7 @@ def check_order_sensitive_arrays(
     検出したら ValidationError を投げ、呼び出し側の既存の衝突処理（下流を温存し
     <path>.base-latest を併置）にそのまま合流させる。
     """
-    path_spec = ORDER_SENSITIVE_ARRAY_PATHS.get(path_hint.name)
+    path_spec = ORDER_SENSITIVE_ARRAY_PATHS.get(path_hint.as_posix())
     if not path_spec:
         return
     base_doc = _load_json_or_none(base)
@@ -181,7 +186,7 @@ def check_order_sensitive_arrays(
         # 「疑わしければ採用しない」という本モジュール全体の方針に合わせて拒否する
         # （黙ってチェックを飛ばして未検証のまま採用しない）。
         raise ValidationError(
-            f"{path_hint.name} の入力（ours/base/theirs のいずれか）が JSON として読めないため、"
+            f"{path_hint.as_posix()} の入力（ours/base/theirs のいずれか）が JSON として読めないため、"
             "順序依存配列チェックを実施できない"
         )
     # merged_text は validate() が同じ suffix 条件で既に json.loads() を通しているため、
@@ -392,7 +397,7 @@ def _self_test() -> int:
         ours11 = write("ours11.json", hooks_doc(["A", "X", "B", "C"]))
         theirs11 = write("theirs11.json", hooks_doc(["A", "B", "C", "Y"]))
         try:
-            merge(ours11, anc11, theirs11, Path("settings.json"))
+            merge(ours11, anc11, theirs11, Path(".claude/settings.json"))
             failures.append("順序依存配列（hooks.PreToolUse）の未決定な相対順序を検出できない")
         except ValidationError as exc:
             check("hooks.PreToolUse が理由に含まれる", "hooks.PreToolUse" in str(exc))
@@ -406,7 +411,7 @@ def _self_test() -> int:
         ours12 = write("ours12.json", perms_doc(["Bash(ls)", "Bash(git status)", "Bash(pwd)", "Bash(whoami)"]))
         theirs12 = write("theirs12.json", perms_doc(["Bash(ls)", "Bash(pwd)", "Bash(whoami)", "Bash(echo hi)"]))
         try:
-            merged12 = merge(ours12, anc12, theirs12, Path("settings.json")).decode("utf-8")
+            merged12 = merge(ours12, anc12, theirs12, Path(".claude/settings.json")).decode("utf-8")
             check("permissions.allow は順序依存扱いにならない", "Bash(git status)" in merged12 and "Bash(echo hi)" in merged12)
         except ValidationError as exc:
             failures.append(f"順序に意味の無い配列を過剰に要確認へ倒した: {exc}")
@@ -430,9 +435,20 @@ def _self_test() -> int:
         ours13 = write("ours13.json", multi_event_doc(["A", "X", "B"], ["P", "Q"]))
         theirs13 = write("theirs13.json", multi_event_doc(["A", "B"], ["P", "Q", "Z"]))
         try:
-            merge(ours13, anc13, theirs13, Path("settings.json"))
+            merge(ours13, anc13, theirs13, Path(".claude/settings.json"))
         except ValidationError as exc:
             failures.append(f"別イベント名を別側が独立に変更しただけなのに誤検知した: {exc}")
+
+        # 14. basename が同じ "settings.json" でも .claude/ 配下でない別ファイルは対象外（Issue #50）。
+        #     11 と同じ hooks.PreToolUse の未決定パターンでも、path_hint が相対パスで一致しなければ
+        #     順序依存配列チェック自体が発動せず、クリーンマージとして採用される。
+        anc14 = write("anc14.json", hooks_doc(["A", "B", "C"]))
+        ours14 = write("ours14.json", hooks_doc(["A", "X", "B", "C"]))
+        theirs14 = write("theirs14.json", hooks_doc(["A", "B", "C", "Y"]))
+        try:
+            merge(ours14, anc14, theirs14, Path(".vscode/settings.json"))
+        except ValidationError as exc:
+            failures.append(f"basename 一致だけで .claude/settings.json 以外まで誤検知した: {exc}")
 
     if failures:
         for f in failures:

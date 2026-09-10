@@ -71,6 +71,32 @@ DEST_VALUE_FLAGS = {
 }
 # 実コマンドの前に置かれ、読み飛ばしてよいラッパー
 COMMAND_WRAPPERS = {"sudo", "env", "nice", "ionice", "command", "exec", "builtin", "time", "timeout"}
+# `-c` 引数のスクリプト文字列を再帰的に解析する対象（bash -c / sh -c 等・Issue #50）
+# 既知の限界: perl -e / python3 -c / ruby -e / awk 等の非シェル言語経由の任意コードは対象外
+#（モジュール docstring の「射程と限界」と同じ理由。列挙型である以上すべての言語処理系を
+# 網羅できない。コンテナ隔離が最終防御という位置づけは変わらない）。
+SHELL_C_NAMES = {"bash", "sh", "zsh", "dash", "ksh"}
+# bash 系シェルは `-euc SCRIPT` のように単純フラグを1トークンへ結合でき、結合順に関係なく
+# 'c' が含まれれば直後の引数をスクリプトとして消費する（実機確認済み）。ここに無いフラグ文字
+# （値を取るもの・ロングオプション等）が混ざるトークンは対象外とし、過検知を避ける。
+_BASH_SIMPLE_FLAG_CHARS = set("aBbCcDEefHhiklmnOoPprsTtuvx")
+# find の式にこれらが現れたら削除系アクションとみなす（-exec/-execdir の直後のサブコマンド判定に使う）
+FIND_EXEC_FLAGS = {"-exec", "-execdir", "-ok", "-okdir"}
+# `-exec` の直後に来たら「書き込み / 削除を伴う」とみなすサブコマンド（削除系だけでは
+# `find .claude/hooks -exec sed -i ... {} \;` が素通りする・PR #55 Layer 1 指摘）
+FIND_EXEC_DESTRUCTIVE = WRITE_ALL_ARGS | WRITE_LAST_ARG | {"rm", "sed", "dd"}
+# xargs 自身のフラグのうち値を1つ消費するもの（サブコマンド名の誤認防止・Issue #50 レビュー指摘）
+XARGS_VALUE_FLAGS = {
+    "-I", "-i", "-E", "-L", "-l", "-n", "-P", "-s", "-a", "-d",
+    "--replace", "--max-args", "--max-lines", "--max-procs", "--max-chars",
+    "--arg-file", "--delimiter", "--eof",
+}
+# xargs 経由で呼ばれると対象パスが標準入力由来になり静的判定できないため、
+# これらのサブコマンドが来たら判定不能として fail-open にせず一律ブロックする
+XARGS_DESTRUCTIVE = WRITE_ALL_ARGS | WRITE_LAST_ARG | {"dd", "sed"} | SHELL_C_NAMES
+# コマンド置換 / bash -c の再帰評価が入れ子になりすぎたときの深度上限（RecursionError での
+# クラッシュを防ぐ・Issue #50 レビュー指摘）。通常のコマンドはここまで深くネストしない。
+MAX_RECURSION_DEPTH = 20
 # セグメント区切りとして扱うトークン（`&>` はリダイレクトなので含めない）
 SEGMENT_SEPARATORS = {";", "&", "&&", "|", "||"}
 # リダイレクト演算子（`>` `>>` `2>` `&>` `>|` `1>>` 等）
@@ -294,6 +320,103 @@ def _command_index(tokens: list[str]) -> int | None:
     return None
 
 
+def _is_shell_c_flag(token: str) -> bool:
+    """`-c` そのもの、または `-euc` のように 'c' を含む単純フラグの結合トークンか。"""
+    if token == "-c":
+        return True
+    if len(token) > 1 and token[0] == "-" and token[1] != "-":
+        chars = set(token[1:])
+        return "c" in chars and chars <= _BASH_SIMPLE_FLAG_CHARS
+    return False
+
+
+def _shell_c_script(tokens: list[str], index: int) -> str | None:
+    """`bash -c '...'` / `bash -euc "..."` 等、`-c` 相当のフラグ直後にあるスクリプト文字列を返す。
+
+    最初の非フラグトークンに達したら走査を止める（bash 自身のオプション解析は最初の
+    非フラグ引数以降を位置引数として扱うため、それ以降を `-c` 探索の対象にしない）。
+    """
+    i = index + 1
+    while i < len(tokens):
+        token = tokens[i]
+        if _is_shell_c_flag(token):
+            return tokens[i + 1] if i + 1 < len(tokens) else None
+        if not token.startswith("-"):
+            break
+        i += 1
+    return None
+
+
+def _leading_command_name(tokens: list[str]) -> str | None:
+    """先頭のフラグ（値を取るものは値ごと）を読み飛ばした最初の非フラグトークンを返す。
+
+    `xargs -0 rm -rf` の `rm` や `xargs -I {} bash -c ...` の `bash` のように、対象コマンドの
+    前に xargs 自身のフラグが挟まる形を拾う。値を取るフラグ（`XARGS_VALUE_FLAGS`）はその値
+    トークンも読み飛ばさないと、値（`{}` 等）をコマンド名と誤認してブロックをすり抜ける
+    （Issue #50 レビュー指摘・CRITICAL）。
+    """
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.startswith("-"):
+            if token in XARGS_VALUE_FLAGS and i + 1 < len(tokens):
+                i += 2
+            else:
+                i += 1
+            continue
+        return os.path.basename(token)
+    return None
+
+
+def _find_has_destructive_action(args: list[str]) -> bool:
+    """`find` の式に `-delete` か、`-exec` / `-execdir` 経由の書き込み系コマンドが含まれるか。
+
+    判定対象は削除系（`rm` 等）だけでなく `sed -i` / `cp` / `mv` / `tee` / `ln` まで含める。
+    `find .claude/hooks -type f -exec sed -i "s/a/b/" {} \\;` は C1（フックの書き換え）と同義で、
+    削除系に限定していると保護パスガードごと素通りする（PR #55 Layer 1 指摘）。
+    """
+    for i, arg in enumerate(args):
+        if arg == "-delete":
+            return True
+        if arg in FIND_EXEC_FLAGS and i + 1 < len(args):
+            sub = os.path.basename(args[i + 1])
+            if sub in FIND_EXEC_DESTRUCTIVE:
+                return True
+    return False
+
+
+def _extract_command_substitutions(text: str) -> list[str]:
+    """`$( ... )` の内側コマンド文字列を、ネストを保ったまま独立の文字列として抽出する。
+
+    `shlex(punctuation_chars=True)` は `$(` `)` を境界として扱わずトークンを平坦化するため、
+    `echo $(rm -rf /outside)` のような置換の中身が実コマンドとして認識されない（Issue #50）。
+    ここでテキストレベルで括弧の対応を取って切り出し、`analyze()` に独立コマンドとして
+    再帰的に渡す（バッククォート形式 `` `cmd` `` は対象外）。
+    """
+    results: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "$" and i + 1 < n and text[i + 1] == "(":
+            depth = 1
+            j = i + 2
+            start = j
+            while j < n and depth > 0:
+                if text[j] == "(":
+                    depth += 1
+                elif text[j] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            inner = text[start:j]
+            if inner.strip():
+                results.append(inner)
+            i = j + 1
+            continue
+        i += 1
+    return results
+
+
 def _strip_redirection_args(tokens: list[str]) -> list[str]:
     """リダイレクト演算子とその直後の宛先をトークン列から除く（宛先は別途 targets へ入れる）。"""
     cleaned: list[str] = []
@@ -364,7 +487,29 @@ def _write_targets(tokens: list[str]) -> list[str]:
         targets.extend(operands)
     elif name in WRITE_LAST_ARG and operands and not flag_dests:
         targets.append(operands[-1])
+    elif name == "find" and _find_has_destructive_action(args):
+        # -delete / -exec ... 書き込み系があれば、検索対象パスと -exec 以降の実引数（いずれも
+        # 非フラグ引数として operands に入る）を書き込み対象とみなす
+        targets.extend(operands)
     return targets
+
+
+def _repo_root_of(cwd: str) -> str:
+    """`cwd` から上へ辿って `.git` を持つディレクトリ（リポジトリルート）を返す。見つからなければ `cwd`。
+
+    保護パス判定の基点を payload の `cwd` にすると、セッションが以前のターンで
+    `cd .claude/hooks` していた場合（Bash ツールの cwd はコマンド間で永続する）、
+    保護対象の `.claude` / `.git` セグメントが基点側に吸収されて判定できなくなる。
+    ルートへ正規化してから相対パスを取ることでこの取りこぼしを塞ぐ（PR #55 Layer 1 指摘）。
+    """
+    current = cwd
+    while True:
+        if os.path.exists(os.path.join(current, ".git")):  # worktree では .git がファイル
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return cwd  # リポジトリ外（テスト用の仮想 cwd 等）は従来どおり cwd を基点にする
+        current = parent
 
 
 def _repo_protected(path: str, cwd: str) -> str | None:
@@ -380,7 +525,10 @@ def _repo_protected(path: str, cwd: str) -> str | None:
     i = 0
     while i < len(parts):
         part = parts[i]
-        if part == ".claude" and i + 1 < len(parts) and parts[i + 1] == _WORKTREES_DIRNAME:
+        # 除外するのは `.claude/worktrees/<name>/**` であって、コンテナである `.claude/worktrees`
+        # 自体ではない（`i + 2 < len(parts)` = worktree 名セグメントが実在するときだけ読み飛ばす。
+        # 無いまま読み飛ばすと `rm -rf .claude/worktrees` が保護判定に到達しない・PR #55 Layer 1 指摘）
+        if part == ".claude" and i + 2 < len(parts) and parts[i + 1] == _WORKTREES_DIRNAME:
             i += 3  # `.claude/worktrees/<name>` を読み飛ばして続きを走査
             continue
         if part in _REPO_PROTECTED_DIRS:
@@ -433,12 +581,31 @@ def _path_like(tokens: list[str]) -> list[str]:
     return [t for t in tokens if t.startswith("/") or t.startswith("~")]
 
 
-def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str]:
+def analyze(command: str, cwd: str, home: str, session_id: str = "", _depth: int = 0,
+            _repo_root: str | None = None) -> list[str]:
     """ブロック理由のリストを返す（空なら問題なし）。"""
+    if _depth > MAX_RECURSION_DEPTH:
+        # コマンド置換 / bash -c の入れ子が深すぎて Python の再帰上限に達する前に安全側で打ち切る
+        # （fail-closed。Issue #50 レビュー指摘: 未対策だと RecursionError で無整形にクラッシュする）
+        return [
+            f"コマンド置換 / bash -c の入れ子が深すぎるため安全性を判定できません（上限 {MAX_RECURSION_DEPTH}）\n"
+            "  → コマンドを単純化すること。"
+        ]
     reasons: list[str] = []
     expanded = _expand_assignments(_strip_heredocs(command))
+
     home_claude = os.path.realpath(os.path.join(home, ".claude"))
     cwd = os.path.realpath(cwd)
+    # 保護パス判定の基点はリポジトリルート（最初の呼び出しの cwd）に固定する。`cd .claude/hooks &&
+    # bash -c "sed -i ... x.sh"` のように再帰評価へ入る前に cwd が保護ディレクトリの内側へ移ると、
+    # 相対パスから `.claude` / `.git` セグメントが基点側に吸収されて判定できなくなるため
+    # （パス解決の基点 cwd と保護判定の基点 repo_root を分ける）
+    repo_root = _repo_root_of(cwd) if _repo_root is None else _repo_root
+
+    # コマンド置換 `$(...)` の内側は、セグメント走査を終えてから再帰評価する（`cd` 追跡の結果を
+    # 基点候補に含めるため。抽出はテキストベースで位置情報を持たないので、走査中に観測した
+    # `cd` 先すべてを基点候補として評価し、いずれかで危険と判定されたらブロックする＝安全側に倒す）
+    cd_bases: list[str] = []
     tmpdir = os.environ.get("TMPDIR", "").strip()
     safe_bases = [cwd] + ([os.path.realpath(tmpdir)] if tmpdir else [])
     # `cd` でカレントディレクトリが変わったら以降のセグメントの基点も変える（None = 解決不能）
@@ -454,6 +621,24 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
     for tokens in _segments(expanded):
         if _toggle_in_segment(tokens):
             continue  # このセグメントだけ明示的に外されている（#582・#583）
+
+        index = _command_index(tokens)
+        name = os.path.basename(tokens[index]) if index is not None else None
+
+        # (0) `bash -c` / `sh -c` 等: -c 引数のスクリプト文字列を独立コマンドとして再帰評価する
+        if name in SHELL_C_NAMES and current_cwd is not None:
+            inner = _shell_c_script(tokens, index)
+            if inner:
+                reasons.extend(analyze(inner, current_cwd, home, session_id, _depth + 1, repo_root))
+
+        # (0.5) xargs 経由の破壊的コマンドは対象パスが標準入力由来で静的判定できないため一律ブロックする
+        if name == "xargs":
+            sub = _leading_command_name(tokens[index + 1:])
+            if sub in XARGS_DESTRUCTIVE:
+                reasons.append(
+                    f"xargs 経由の破壊的コマンド（{sub}）: 対象パスが標準入力由来のため安全性を判定できません\n"
+                    "  → 対象を明示した個別コマンドに書き換えること。"
+                )
 
         # (1) ホーム配下の Claude 領域への Bash アクセス（読み書き問わず）
         for token in _path_like(tokens):
@@ -471,13 +656,20 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
         # (2') cwd の内側でも、リポジトリ自身の .claude/** と .git/** への Bash 書き込みは保護する
         #      （#618・C1/C3）。is_safe() は cwd 内を無条件に True にするため、必ずその前に判定する。
         for token in _write_targets(tokens):
+            if current_cwd is None and not token.startswith(("/", "~")) and not _UNRESOLVED_VAR.search(token):
+                # cd 先が解決できず、かつ変数参照でもない相対パス＝安全性を判定する基点が無い（fail-closed・Issue #50）
+                reasons.append(
+                    f"cd 先が解決できないため相対パスの書き込み / 削除先を判定できません: {token}\n"
+                    "  → 絶対パスを使うか、cd 先を静的に解決できる形にすること。"
+                )
+                continue
             resolved = _resolve(token, current_cwd, home)
             if resolved is None:
                 continue
             in_tmp = _session_tmp_ok(resolved, session_id) or any(_under(resolved, b) for b in safe_bases[1:])
-            protected = None if in_tmp else _repo_protected(resolved, cwd)
+            protected = None if in_tmp else _repo_protected(resolved, repo_root)
             if protected is not None:
-                if _legit_rules_symlink(tokens, resolved, cwd, home):
+                if _legit_rules_symlink(tokens, resolved, repo_root, home):
                     continue
                 reasons.append(
                     f"リポジトリ内の保護パス（{protected}）への Bash 書き込み: {resolved}\n"
@@ -493,17 +685,22 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
             )
 
         # (3) `cd` の効果を次のセグメントへ引き継ぐ
-        index = _command_index(tokens)
-        if index is not None and os.path.basename(tokens[index]) == "cd":
+        if index is not None and name == "cd":
             raw = tokens[index + 1:]
             if raw and raw[0] == "-":
                 # `cd -`（直前のディレクトリへ戻る）は追跡していないので判定不能にする。`-` をフラグ扱いで
                 # 落として home へ移動したと誤断定すると、以降の相対パスが実在しない場所へ解決され
-                # 保護パスへの書き込みを見逃す（Layer 1 指摘）
+                # 保護パスへの書き込みを見逃す（#618 Layer 1 指摘）
                 current_cwd = None
             else:
                 operands = [t for t in raw if not t.startswith("-")]
                 current_cwd = _resolve(operands[0], current_cwd, home) if operands else home
+            if current_cwd is not None and current_cwd not in cd_bases:
+                cd_bases.append(current_cwd)
+
+    for substitution in _extract_command_substitutions(expanded):
+        for base in [cwd, *cd_bases]:
+            reasons.extend(analyze(substitution, base, home, session_id, _depth + 1, repo_root))
 
     # 同一理由の重複を除く（順序は維持）
     return list(dict.fromkeys(reasons))
@@ -560,11 +757,45 @@ def _self_test() -> int:
         (True, 'echo x > .claude/rules/new.md'),  # symlink 以外の .claude/rules 書き込みは保護
         (True, 'cd .claude/hooks && cd .. && sed -i "s/a/b/" hooks/x.sh'),  # cd .. 追従
         (True, 'ln -sf ../../docs/rules/x.md .claude/rules/x.md && sed -i "s/a/b/" .claude/hooks/x.sh'),
-        (False, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),  # cd - は判定不能（素通り・見逃しを承知で誤断定より安全側）
+        # cd - 追跡は未対応（判定不能）だが、Issue #50 の fail-closed（基点不明の相対書き込みは
+        # 判定不能としてブロック）が併存するため、以前の「素通り（False）」から BLOCK に変わる
+        (True, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),
         (False, f'sed -i "s/a/b/" /tmp/claude-0/proj/{sid}/scratchpad/lab/.claude/hooks/dummy.sh'),  # scratchpad のラボは対象外
         (False, f'cd /tmp/claude-0/proj/{sid}/scratchpad/lab && echo x >> .git/info/exclude'),
         (False, 'ln -s ../../docs/rules/new-rule.md .claude/rules/new-rule.md'),
         (False, 'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 cp local-hook.sh .git/hooks/pre-commit'),  # 脱出ハッチは設計どおり効く
+        # --- 新機能（保護パス）× 既存の下流パッチ（再帰評価・find）の合成（PR #55 Layer 1 指摘） ---
+        (True, 'bash -c "sed -i \'s/a/b/\' .claude/hooks/x.sh"'),
+        (True, 'sh -c "echo x >> .git/info/exclude"'),
+        (True, 'echo $(sed -i "s/a/b/" .claude/rules/new.md)'),
+        (True, 'cd .claude/hooks && bash -c "sed -i \'s/a/b/\' dummy.sh"'),  # 基点が保護配下でも判定できる
+        (True, 'cd .git/hooks && bash -c "rm -f pre-commit"'),
+        (True, 'cd .claude/hooks && echo $(sed -i "s/a/b/" pre-tool-use-router.sh)'),
+        (True, 'find .claude/hooks -type f -exec sed -i "s/a/b/" {} \\;'),  # find 経由の書き換え
+        (True, 'find .claude/hooks -type f -execdir sed -i "s/a/b/" {} \\;'),
+        (True, 'find . -type f -exec sed -i "s/a/b/" /tmp/demo-out/x \\;'),  # 直書きの書き込み先
+        (True, 'rm -rf .claude/worktrees'),  # コンテナ自体は除外しない
+        (False, 'find .claude/hooks -type f -exec grep -l ERROR {} \\;'),  # 非破壊なら通す
+        # Issue #50: PR #49 の Layer 1 セルフレビューで見つかった 4 件の検知漏れ
+        (True, 'bash -c "rm -rf /tmp/demo-out"'),
+        (True, 'sh -c "rm -rf /tmp/demo-out"'),
+        (True, 'find /tmp/demo-out -type f -delete'),
+        (True, 'find /tmp/demo-out -exec rm -rf {} \\;'),
+        (True, 'echo $(rm -rf /tmp/demo-out)'),
+        (True, 'cd "$(mktemp -d)"; rm -rf newfile'),
+        (True, 'find /tmp/demo-out -type f | xargs rm -f'),
+        (False, 'bash -c "echo hello"'),
+        (False, 'find . -name "*.pyc"'),
+        (False, 'find . -name "*.log" | xargs grep -l ERROR'),
+        (False, 'echo $(pwd)'),
+        # Layer 1 セルフレビュー指摘（CONFIRMED・PR #51）: xargs の値取りフラグ誤認・bash 複合フラグ・再帰爆弾
+        (True, 'find /tmp/demo-out -type f | xargs -I {} bash -c "rm -rf {}"'),
+        (True, 'bash -euc "rm -rf /tmp/demo-out"'),
+        (True, 'bash -lc "rm -rf /tmp/demo-out"'),
+        (True, 'echo ' + '$(' * 30 + 'pwd' + ')' * 30),
+        (False, 'find . -name "*.txt" | xargs -I {} grep -l ERROR {}'),
+        (True, 'bash -c "bash -c \'rm -rf /tmp/demo-out\'"'),
+        (True, 'echo $(echo $(rm -rf /tmp/demo-out))'),
         (False, f'mkdir -p /tmp/claude-0/proj/{sid}/scratchpad && echo hi > /tmp/claude-0/proj/{sid}/scratchpad/a.txt'),
         (False, 'echo hi > ./notes.md'),
         (False, 'rm -rf node_modules'),

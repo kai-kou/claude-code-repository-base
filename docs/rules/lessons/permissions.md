@@ -122,7 +122,7 @@ allow/deny の評価順とレイヤー適用範囲（Bash 限定 vs 全ツール
   | symlink | `realpath` で解決してから判定する（作業ツリー内のリンクが外を指すケース） |
   | 脱出ハッチ | `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` はセッション env と **コマンド先頭の前置き代入** の両方で効く（フックは `os.environ` しか見ないため、前置きはコマンド文字列から検出する）。判定は **セグメント先頭の連続する代入トークン** に限り（文字列中にこの語が現れただけでは外れない）、効果もそのセグメントに閉じる（シェルの `VAR=1 cmd` と同じ意味論）。heredoc 本文中の記述も無効。設計上リポジトリ外に成果物を置く正規手順（公開リポジトリのチェックアウト等）を止めないための出口・#582 |
 
-  回帰テストは `bash tools/test_workspace_write_guard.sh`（39 ケース）と、ガード単体の `python3 .claude/hooks/lib/workspace_write_guard.py --self-test`。機密ファイルガードの回帰テストは同じ router を通すため、本ガードをトグルで切って走らせる（検証したい機密判定が別ガードのブロックでマスクされるのを防ぐ）。
+  回帰テストは `bash tools/test_workspace_write_guard.sh`（98 ケース: `run_case` 95 + トグル直接検証 1 + TMPDIR 分岐検証 1 + ルーター統合 1）と、ガード単体の `python3 .claude/hooks/lib/workspace_write_guard.py --self-test`。件数はどちらもテストファイルの追加のたびにずれるため、正確な値は `grep -c "^run_case " tools/test_workspace_write_guard.sh` で実測すること（本行にハードコードした値を信じない）。機密ファイルガードの回帰テストは同じ router を通すため、本ガードをトグルで切って走らせる（検証したい機密判定が別ガードのブロックでマスクされるのを防ぐ）。
 
   **読み取りまでブロックする根拠**（レビュー指摘への回答）: ホーム配下 `.claude` は書き込みだけでなく **読み取りもプロンプトになる**。headless プローブで `cat <ホーム配下 .claude のファイル> | head -3` と `grep -c . <同>` を投入したところ、両方とも `permission_denials` に記録された（拒否理由の文面も "tries to read a file outside the allowed working directory"）。ただしこの実測ラボは `permissions.allow` を持たないため、本ベースの `Bash(cat:*)` / `Bash(grep:*)` が allow 側で先に決着する可能性は残る（未確認）。**無人停止のコスト（誰も承認せず無限待ち）と代替のコスト（ネイティブ Read / Grep へ切り替える 1 往復）が非対称** なので、読み取りもブロック側に倒している。
 - **行動規範**: 一時作業はセッション scratchpad（システムプロンプトが提示するパス）で行う（リポジトリ内で行う場合も、リポジトリ直下に一時ファイルを作って `.git/info/exclude` で除外する運用と、`.claude/` `.git/` への Bash 直書きは L-130 のとおり禁止）。ツール結果の persisted output（ホーム配下 `.claude/projects/.../tool-results/`）は **ネイティブ Read / Grep で読む**（`PermissionRequest` フックが自動承認する）。Bash で複製しない。

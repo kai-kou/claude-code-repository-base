@@ -90,11 +90,25 @@ run_case BLOCK "worktree 内のフックは再び保護（Layer 1 指摘）" 'se
 run_case BLOCK "mv でフックを外へ移す（移動元の除去・Layer 1 指摘）" 'mv .claude/hooks/pre-tool-use-router.sh /tmp/demo-out/x'
 run_case BLOCK "リンク元が docs/rules 外の .claude/rules への symlink（Layer 1 指摘）" 'ln -sf /etc/passwd .claude/rules/evil.md'
 run_case BLOCK "symlink 以外の .claude/rules 書き込み" 'echo x > .claude/rules/new.md'
-run_case ALLOW "cd - は判定不能として素通り（見逃しを承知で誤断定より安全側）" 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'
+# 以前は「cd - は判定不能として素通り（ALLOW）」だったが、Issue #50 の fail-closed
+# （基点不明の相対書き込みは判定不能としてブロックする）を導入したため BLOCK になる
+run_case BLOCK "cd - 後の相対書き込みは基点不明として差し戻す（#50 fail-closed）" 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'
 run_case ALLOW "scratchpad 内のラボの .claude は対象外" \
   "sed -i 's/a/b/' /tmp/claude-0/demo/$TEST_SESSION/scratchpad/lab/.claude/hooks/dummy.sh"
 run_case ALLOW "前置きトグルで .git 配下の復旧操作を通す" \
   'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f .git/index.lock'
+
+echo "[test] 保護パス × 既存の下流パッチ（再帰評価・find）の合成（PR #55 Layer 1 指摘）"
+run_case BLOCK "bash -c 越しの .claude 書き換え" 'bash -c "sed -i '"'"'s/a/b/'"'"' .claude/hooks/x.sh"'
+run_case BLOCK "sh -c 越しの .git/info/exclude 追記" 'sh -c "echo x >> .git/info/exclude"'
+run_case BLOCK "コマンド置換の内側の .claude/rules 書き込み" 'echo $(sed -i "s/a/b/" .claude/rules/new.md)'
+run_case BLOCK "cd で保護配下に入ってから bash -c" 'cd .claude/hooks && bash -c "sed -i '"'"'s/a/b/'"'"' dummy.sh"'
+run_case BLOCK "cd で保護配下に入ってからコマンド置換" 'cd .claude/hooks && echo $(sed -i "s/a/b/" pre-tool-use-router.sh)'
+run_case BLOCK "find -exec sed -i によるフック書き換え" 'find .claude/hooks -type f -exec sed -i "s/a/b/" {} \;'
+run_case BLOCK "find -execdir sed -i によるフック書き換え" 'find .claude/hooks -type f -execdir sed -i "s/a/b/" {} \;'
+run_case BLOCK "find -exec の直書き書き込み先（作業領域外）" 'find . -type f -exec sed -i "s/a/b/" /tmp/demo-out/x \;'
+run_case BLOCK ".claude/worktrees コンテナ自体の削除は除外しない" 'rm -rf .claude/worktrees'
+run_case ALLOW "find -exec が非破壊コマンドなら通す" 'find .claude/hooks -type f -exec grep -l ERROR {} \;'
 
 echo "[test] 通すべきケース"
 run_case ALLOW "自セッションの scratchpad への書き込み" \
@@ -144,6 +158,30 @@ run_case BLOCK "複数行コマンドの後方行のトグルは前の行に及�
   'rm -rf /tmp/demo-out
 echo x
 CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 true'
+
+echo "[test] Issue #50: PR #49 レビューで見つかった検知漏れ 4 件"
+run_case BLOCK "bash -c 経由の削除" 'bash -c "rm -rf /tmp/demo-out"'
+run_case BLOCK "sh -c 経由の削除" 'sh -c "rm -rf /tmp/demo-out"'
+run_case BLOCK "find -delete による削除" 'find /tmp/demo-out -type f -delete'
+run_case BLOCK "find -exec rm による削除" 'find /tmp/demo-out -exec rm -rf {} \;'
+run_case BLOCK "コマンド置換の内側にある削除" 'echo $(rm -rf /tmp/demo-out)'
+run_case BLOCK "cd 先が未解決のまま相対パスを削除（fail-closed）" 'cd "$(mktemp -d)"; rm -rf newfile'
+run_case BLOCK "find | xargs rm による削除" 'find /tmp/demo-out -type f | xargs rm -f'
+run_case ALLOW "bash -c 経由でも非破壊コマンドは通す" 'bash -c "echo hello"'
+run_case ALLOW "find に -delete/-exec が無ければ通す" 'find . -name "*.pyc"'
+run_case ALLOW "xargs の対象が非破壊コマンドなら通す" 'find . -name "*.log" | xargs grep -l ERROR'
+run_case ALLOW "コマンド置換の内側が非破壊コマンドなら通す" 'echo $(pwd)'
+
+echo "[test] Layer 1 セルフレビュー指摘（CONFIRMED・PR #51）"
+run_case BLOCK "xargs -I {} 越しの bash -c（値取りフラグの値をコマンド名と誤認しない）" \
+  'find /tmp/demo-out -type f | xargs -I {} bash -c "rm -rf {}"'
+run_case BLOCK "bash の複合短縮フラグ（-euc）でも -c と同じ扱いにする" 'bash -euc "rm -rf /tmp/demo-out"'
+run_case BLOCK "bash の複合短縮フラグ（-lc）でも -c と同じ扱いにする" 'bash -lc "rm -rf /tmp/demo-out"'
+run_case ALLOW "xargs -I {} の対象が非破壊コマンドなら通す" \
+  'find . -name "*.txt" | xargs -I {} grep -l ERROR {}'
+run_case BLOCK "bash -c のネスト（テストカバレッジ指摘・PR #51）" \
+  'bash -c "bash -c '"'"'rm -rf /tmp/demo-out'"'"'"'
+run_case BLOCK "コマンド置換のネスト（テストカバレッジ指摘・PR #51）" 'echo $(echo $(rm -rf /tmp/demo-out))'
 
 echo "[test] TMPDIR 配下の .claude は対象外（実値で分岐を通す）"
 tmp_out=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"cp -r .claude/skills /tmp/wwg-tmpdir/.claude/skills"}}))' "$TEST_CWD" \
