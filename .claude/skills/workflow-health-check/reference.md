@@ -138,7 +138,7 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
 
 6-c: 常駐ルール合算サイズチェック
   └─ cat .claude/rules/*.md | wc -c で symlink 先の実体合算を集計
-  └─ token-optimization-rules.md の Hot 層予算（現行 ~65KB / ~16,300 トークン・#324 改定）と突き合わせ
+  └─ token-optimization-rules.md の Hot 層予算（現行 ~85.5KB / ~21,000 トークン・#580 再校正）と突き合わせ
   └─ 予算超過 → Warning（Warm 降格 or 既存ファイルの追加圧縮を提案）
   └─ 降格提案には必ず「代替の強制レイヤ（ハーネス / スキル / ツール）が実在するか」の確認を添える
 

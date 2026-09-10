@@ -24,9 +24,13 @@
 #     （実測 2026-09-03: MCP の create_pull_request は {"id":"…","url":"https://github.com/o/r/pull/545"}
 #     しか返さない。number/html_url だけを見ると実運用で一度もマークされない・#543）
 #   - mcp__github__list_pull_requests: tool_input.head の ":" 以降が現在ブランチと一致し、
-#     tool_response（配列 / {"pull_requests":[...]} ラッパー / 文字列化 JSON のいずれか）に
-#     state=="open" または merged_at!=null または merged==true の要素が 1 件以上あるとき
-#     （実測: fields 指定時は merged_at が落ちて merged だけになる）
+#     tool_response（MCP コンテンツブロック配列 / 配列直値 / {"pull_requests":[...]} ラッパー /
+#     文字列化 JSON のいずれか）に state=="open" または merged_at!=null または merged==true の
+#     要素が 1 件以上あるとき（実測: fields 指定時は merged_at が落ちて merged だけになる）
+#     （実測 2026-09-05: 上記のいずれの形も tool_response の実体は
+#     `[{"type":"text","text":"<JSON文字列>"}]` という MCP コンテンツブロック配列で渡ってくる。
+#     create/list とも unwrap_mcp（_RESPONSE_NORMALIZE 内）で text を JSON として解釈してから
+#     上記の判定にかける。この形を見落とすと常に skip に落ち一度もマークされない・#581）
 #   - それ以外・owner/repo 不一致・壊れた JSON は skip（confirm しない）
 #
 # 出力経路: PostToolUse はブロック不可（exit 2 に効果がない）。常に exit 0。
@@ -39,11 +43,22 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/hook_layer1_common.sh
 source "$HOOK_DIR/lib/hook_layer1_common.sh"
 
-# tool_response（オブジェクト直値 / 文字列化 JSON のいずれか）を正規化して jq に渡す共通フィルタ。
-# 文字列なら fromjson を試み、失敗時は空値へフォールバックする（壊れた JSON でも落ちない）。
+# tool_response を正規化して jq に渡す共通フィルタ（#581）。
+# 実測（2026-09-05・e2e ダンプ）: MCP ツールの tool_response は素の配列/オブジェクトではなく、
+# MCP コンテンツブロック配列 `[{"type":"text","text":"<JSON文字列>"}]` として渡ってくる
+# （list の空応答は `[{"type":"text","text":"[]"}]`）。unwrap_mcp でこの形を検出したら
+# 各ブロックの text を連結し、それを実ペイロードとして扱う。旧来の「オブジェクト直値 /
+# 文字列化 JSON」形（自己テストの合成ケース・将来ハーネスが変わった場合）はこの条件に
+# 一致しないため素通りし、後段の fromjson 試行に委ねる（後方互換を壊さない）。
 _RESPONSE_NORMALIZE='
+  def unwrap_mcp:
+    if (type == "array") and (length > 0)
+       and (all(.[]; (type == "object") and ((.type? // "") == "text") and ((.text? // null) | type) == "string"))
+    then ([.[] | .text] | join(""))
+    else . end;
   def norm:
-    if type == "string" then (try fromjson catch null) else . end;
+    unwrap_mcp
+    | if type == "string" then (try fromjson catch null) else . end;
 '
 
 # ── 検知: このツール呼び出しは「現在ブランチの PR が実在すると確認できた」か ──────────
@@ -150,6 +165,27 @@ run_self_test() {
     '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"widgets","head":"acme:feat/x"},"tool_response":"{\"pull_requests\":[{\"state\":\"open\"}]}"}'
   _case "create 文字列化 JSON は confirm" "confirm:feat/x" "feat/x" \
     '{"tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"acme","repo":"widgets","head":"feat/x"},"tool_response":"{\"number\":42}"}'
+  # 実測形（#581・2026-09-05）: MCP ツールの tool_response は
+  # `[{"type":"text","text":"<JSON文字列>"}]` というコンテンツブロック配列で渡ってくる
+  # （素の配列/オブジェクト直値ではない）。この形を検出できないと list/create とも
+  # 常に skip に落ち、マーカーが一度も作られなかった（実セッションで確認済み）。
+  _case "list 空応答（実測の MCP コンテンツブロック形）は skip" "skip:no-match-in-response" "feat/x" \
+    '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"widgets","head":"acme:feat/x"},"tool_response":[{"type":"text","text":"[]"}]}'
+  _case "list open あり（実測の MCP コンテンツブロック形）は confirm" "confirm:feat/x" "feat/x" \
+    '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"widgets","head":"acme:feat/x"},"tool_response":[{"type":"text","text":"[{\"state\":\"open\"}]"}]}'
+  _case "create 成功（実測の MCP コンテンツブロック形・number 応答）は confirm" "confirm:feat/x" "feat/x" \
+    '{"tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"acme","repo":"widgets","head":"feat/x"},"tool_response":[{"type":"text","text":"{\"number\":42}"}]}'
+  _case "create 成功（実測の MCP コンテンツブロック形・url 応答）は confirm" "confirm:feat/x" "feat/x" \
+    '{"tool_name":"mcp__github__create_pull_request","tool_input":{"owner":"acme","repo":"widgets","head":"feat/x"},"tool_response":[{"type":"text","text":"{\"id\":\"1\",\"url\":\"https://github.com/acme/widgets/pull/545\"}"}]}'
+  # Layer 1 レビュー指摘（#585）: unwrap_mcp は複数ブロックを join("") で連結する実装だが、
+  # 単一ブロックのケースしか自己テストしていなかった。複数ブロック（末尾が空文字列）でも
+  # join 結果が正しい JSON になり confirm へ到達することを固定する（回帰ロック）。
+  _case "list 複数コンテンツブロック（末尾空文字列）は confirm" "confirm:feat/x" "feat/x" \
+    '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"widgets","head":"acme:feat/x"},"tool_response":[{"type":"text","text":"[{\"state\":\"open\"}]"},{"type":"text","text":""}]}'
+  # type が text 以外のブロックが混ざる場合は unwrap_mcp の all() 条件を満たさず素通りし
+  # （コンテンツブロックとして解釈しない＝安全側の skip）、誤って confirm しないことを固定する。
+  _case "list 非 text 型ブロック混在は skip（安全側）" "skip:no-match-in-response" "feat/x" \
+    '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"widgets","head":"acme:feat/x"},"tool_response":[{"type":"image","text":"open"}]}'
   _case "別リポジトリは skip" "skip:other-repo" "feat/x" \
     '{"tool_name":"mcp__github__list_pull_requests","tool_input":{"owner":"acme","repo":"other","head":"acme:feat/x"},"tool_response":[{"state":"open"}]}'
   _case "対象外ツールは skip" "skip:not-pr-confirm-tool" "feat/x" \

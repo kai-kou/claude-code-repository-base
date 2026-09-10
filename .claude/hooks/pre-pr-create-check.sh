@@ -224,15 +224,23 @@ fi
 # 90 秒はあくまで安全マージンであり主防衛線は self_review_check.py 側の予算管理）。
 # サブディレクトリから gh pr create が実行されてもスキップされないようリポジトリルートで実行する
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+# 同梱ツール本体の探索先は repo_root（git 操作対象＝消費先プロジェクト）ではなく
+# CLAUDE_PLUGIN_ROOT（プラグイン配布時にハーネスが設定・実測確認済み）を優先する。
+# 分離しないと、tools/ を持たない第三者プロジェクトでこのゲートがサイレントに無効化される（#539）。
+# 値は絶対パス形式のときのみ採用する（空文字・相対パス等の想定外値は repo_root へフォールバック）。
+scripts_root="$repo_root"
+case "${CLAUDE_PLUGIN_ROOT:-}" in
+  /*) scripts_root="$CLAUDE_PLUGIN_ROOT" ;;
+esac
 check_output=""
-if [ -f "$repo_root/tools/self_review_check.py" ]; then
+if [ -f "$scripts_root/tools/self_review_check.py" ]; then
   cd "$repo_root" || exit 0
   check_exit=0
   if command -v timeout >/dev/null 2>&1; then
-    check_output=$(timeout 90 python3 tools/self_review_check.py 2>&1) || check_exit=$?
+    check_output=$(timeout 90 python3 "$scripts_root/tools/self_review_check.py" 2>&1) || check_exit=$?
   else
     # macOS 等 timeout 不在環境のフォールバック
-    check_output=$(python3 tools/self_review_check.py 2>&1) || check_exit=$?
+    check_output=$(python3 "$scripts_root/tools/self_review_check.py" 2>&1) || check_exit=$?
   fi
   if [ "$check_exit" -eq 1 ]; then
     hook_block "[pre-pr-create-check] セルフレビュー機械チェックで Error を検出したため PR 作成をブロックしました。
@@ -245,6 +253,10 @@ Error を修正してから PR 作成を再実行してください（チェッ�
 
 ローカルで \`python3 tools/self_review_check.py\` を実行し、遅い --self-test の原因を確認してから PR 作成を再実行してください。"
   fi
+else
+  # tools/ 不在時は「無害に不発」ではなく状態を明示する（安全側フォールバック・#539）。
+  # ブロックはしない（チェッカー自体が存在しないため何を Error とすべきか判断できない）。
+  check_output="Warning: tools/self_review_check.py が見つからないため、セルフレビュー機械チェックをスキップしました（探索先: ${scripts_root}/tools/）。CJK Markdown 記法等は手動で確認してください。"
 fi
 
 # 7. Layer 1 セルフレビュー リマインダー（FAIR・全PR必須・非ブロッキング）

@@ -228,9 +228,24 @@ env_persist "export HOOK_PROFILE='${HOOK_PROFILE}'"
 # 破壊的クリーンアップ（reset/checkout/clean）は source=startup のときのみ実行する。
 # startup は新規クローン直後で失う未コミット変更が存在しないため安全。resume/compact/clear
 # では未コミット作業（Stop フックが走らず残った変更等）を消さない（Issue #248・L-100 ①）。
+# 「新規セッション=失うものが無い」は本ベース自身のクラウド実行前提（毎回使い捨てクローン）
+# にのみ成り立つ。プラグインとして配布した場合、CLAUDE_PROJECT_DIR/cwd は消費先の第三者
+# プロジェクトを指すため（実測確認済み・#539）、そこに実 WIP があっても無条件に発火し破壊
+# しうる。CLAUDE_PLUGIN_ROOT はこのスクリプトがプロジェクトローカルなコピー（apply-base
+# 経由で自リポジトリの .claude/hooks/ に置かれた場合）ではなく、プラグイン配布物として
+# 実行されているときにハーネスが設定することを実測確認済みのため、これをゲートに使う（#539）。
+# 値そのものは検証しない（絶対パス形式のみ確認）。ハーネスが設定する他の制御変数
+# （CLAUDE_CODE_ENTRYPOINT・HOOK_SOURCE 等）も同様に無検証で信頼しており、プロセス環境を
+# 汚染できる主体を想定した完全性検証（既知プラグインディレクトリの allowlist 等）は、
+# その allowlist 自体の正本となる配布規約がまだ存在しないため時期尚早と判断した（#539 レビュー）。
+_is_plugin_dist=false
+case "${CLAUDE_PLUGIN_ROOT:-}" in
+  /*) _is_plugin_dist=true ;;
+esac
 _skip_cleanup=false
 if [ "${CLAUDE_HOOK_SKIP_CLEANUP:-}" = "true" ] \
-   || [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "cli" ] || [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "headless" ]; then
+   || [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "cli" ] || [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "headless" ] \
+   || [ "$_is_plugin_dist" = true ]; then
   _skip_cleanup=true
 elif [ -n "${HOOK_SOURCE:-}" ] && [ "${HOOK_SOURCE}" != "startup" ]; then
   # source が取得できて startup 以外（resume/compact/clear）なら破壊的クリーンアップをスキップ。
@@ -239,7 +254,7 @@ elif [ -n "${HOOK_SOURCE:-}" ] && [ "${HOOK_SOURCE}" != "startup" ]; then
 fi
 if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   if [ "$_skip_cleanup" = true ]; then
-    echo "[cleanup] SKIP（headless / 明示スキップ / source=${HOOK_SOURCE:-?}≠startup）" >&2
+    echo "[cleanup] SKIP（headless / 明示スキップ / plugin配布 / source=${HOOK_SOURCE:-?}≠startup）" >&2
   else
     _untracked_count=$(git -C "$PROJECT_DIR" ls-files --others --exclude-standard | wc -l)
     _has_changes=false

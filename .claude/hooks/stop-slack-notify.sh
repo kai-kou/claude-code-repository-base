@@ -35,7 +35,15 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # ※ --summary-only を --flush に置換すると early return でセッションデータが欠落するため禁止。
 #
 # 再帰防止: 差し戻し後の再発火（stop_hook_active=true）では二重計上を避けるためスキップする（#483）。
-_calc_script="${REPO_ROOT}/tools/calc_daily_cost.py"
+# 同梱ツールは REPO_ROOT（git 操作対象＝消費先プロジェクト）ではなく CLAUDE_PLUGIN_ROOT
+# （プラグイン配布時にハーネスが設定）優先で探す。分離しないと第三者プロジェクトで
+# REPO_ROOT/tools/ が存在せず常に不発扱いになる（#539。無害不発自体は意図した設計）。
+# 値は絶対パス形式のときのみ採用する（空文字・相対パス等の想定外値は REPO_ROOT へフォールバック）。
+SCRIPTS_ROOT="$REPO_ROOT"
+case "${CLAUDE_PLUGIN_ROOT:-}" in
+  /*) SCRIPTS_ROOT="$CLAUDE_PLUGIN_ROOT" ;;
+esac
+_calc_script="${SCRIPTS_ROOT}/tools/calc_daily_cost.py"
 if [[ "$stop_hook_active" != "true" ]] && [[ -f "$_calc_script" ]] && command -v python3 &>/dev/null; then
   timeout 15s python3 "$_calc_script" --summary-only <<< "$input" >/dev/null 2>&1 || true
   timeout 15s python3 "$_calc_script" --flush --rotate >/dev/null 2>&1 || true
@@ -47,7 +55,7 @@ unset _calc_script
 # push する（PR・gh 不要）。--gate-daily で JST 当日 1 回に収束する
 # （外部スケジューラ非依存。実データ差分が無ければ no-op で push しない）。
 # 上の flush 直後に置き、最新の月次 JSON をローカルから読ませる。
-_tele_script="${REPO_ROOT}/tools/commit_cost_telemetry.py"
+_tele_script="${SCRIPTS_ROOT}/tools/commit_cost_telemetry.py"
 if [[ "$stop_hook_active" != "true" ]] && [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]] && [[ -f "$_tele_script" ]] && command -v python3 &>/dev/null; then
   # 120s: fetch/push リトライ込みの内部予算に余裕を持たせる。途中で SIGTERM されても
   # マーカーは成功後 stamp のため、同日中の次セッション Stop hook が再試行する（#243）

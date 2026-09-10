@@ -155,6 +155,12 @@ verdict=$(detect_merge "$input" "$expected_owner" "$expected_repo")
 if [[ -n "$DETECT_ONLY" ]]; then echo "$verdict"; exit 0; fi
 [[ "$verdict" == "match" ]] || exit 0
 
+# CLAUDE_PLUGIN_ROOT 分離の対象外（#539 レビューで確認）: check_publish_drift.py は
+# REPO_ROOT = Path(__file__).resolve().parent.parent で「自分自身が置かれた場所」を
+# 開発リポジトリとみなし、そこから scripts/publish-snapshot.sh を実行して比較材料を作る
+# 設計のため、コピー先から実行すると消費先プロジェクトではなくコピー先自身を比較してしまい
+# 誤判定になる。publish-sync レーンは本ベース自身の開発→公開リポジトリ同期専用機能で、
+# 第三者プロジェクトへの一般化を想定しないため、探索先は REPO_ROOT 固定のままでよい。
 DRIFT_SCRIPT="$REPO_ROOT/tools/check_publish_drift.py"
 if [[ ! -f "$DRIFT_SCRIPT" ]] || ! command -v python3 >/dev/null 2>&1; then exit 0; fi
 
