@@ -65,6 +65,37 @@ run_case BLOCK "未終端 heredoc の後続行は解析対象に戻す（fail-cl
 intro
 rm -rf /tmp/demo-out'
 
+echo "[test] リポジトリ内の保護パス（#618・C1 / C3 の実例）"
+run_case BLOCK "実例 C1: sed -i でリポジトリ自身のフックを書き換える（下流 A）" \
+  'cd /home/user/demo-repo && grep -n "tail -n 1" .claude/hooks/pre-tool-use-router.sh && sed -i "/x/d" .claude/hooks/pre-tool-use-router.sh && diff -q /tmp/r.sh.bak3 .claude/hooks/pre-tool-use-router.sh && echo "NO_CHANGE" || echo "CHANGED"'
+run_case BLOCK "実例 C3: .git/info/exclude へのリダイレクト追記（下流 C）" \
+  'cd /home/user/demo-repo && echo "tmp-content-issues.json" >> .git/info/exclude && git status --porcelain; echo "--- ok"'
+run_case BLOCK "hooks 以外の .claude/** への sed -i" 'sed -i "s/a/b/" .claude/skills/foo/SKILL.md'
+run_case BLOCK ".claude/settings.json への sed -i" 'sed -i "s/a/b/" .claude/settings.json'
+run_case BLOCK "tee -a で .claude 配下へ追記" 'echo x | tee -a .claude/hooks/x.sh'
+run_case BLOCK ".git/hooks への cp（許容している副作用・脱出ハッチで通す）" 'cp local-hook.sh .git/hooks/pre-commit'
+run_case BLOCK "cd で .claude/hooks に入ってからの相対パス書き換え" 'cd .claude/hooks && sed -i "s/a/b/" dummy.sh'
+run_case BLOCK "rules 以外の .claude/** への symlink 作成" 'ln -sf ../../docs/x.md .claude/skills/foo/SKILL.md'
+run_case ALLOW "正規手順: docs/rules → .claude/rules の symlink" 'ln -sf ../../docs/rules/x.md .claude/rules/x.md'
+run_case ALLOW "公式の明示除外: .claude/worktrees" 'echo x > .claude/worktrees/wt-1/marker'
+run_case ALLOW "git サブコマンド自体は対象外（config）" 'git config core.excludesfile .git/info/exclude'
+run_case ALLOW "git サブコマンド自体は対象外（update-index）" 'git update-index --assume-unchanged path/to/file'
+run_case ALLOW "git サブコマンド自体は対象外（worktree）" 'git worktree add ../wt-x'
+run_case ALLOW "ラッパースクリプト経由（内部の cp -a はこの層から不可視）" 'bash scripts/apply-to-repo.sh'
+run_case ALLOW "リポジトリ内 .claude の読み取り" 'cat .claude/hooks/pre-tool-use-router.sh'
+run_case ALLOW ".claude をコピー元にして scratchpad へ複製" \
+  "cp -r .claude/skills /tmp/claude-0/demo/$TEST_SESSION/scratchpad/skills"
+run_case BLOCK "深い位置の .claude も保護（Layer 1 指摘）" 'sed -i "s/a/b/" sub/.claude/hooks/x.sh'
+run_case BLOCK "worktree 内のフックは再び保護（Layer 1 指摘）" 'sed -i "s/a/b/" .claude/worktrees/wt-1/.claude/hooks/x.sh'
+run_case BLOCK "mv でフックを外へ移す（移動元の除去・Layer 1 指摘）" 'mv .claude/hooks/pre-tool-use-router.sh /tmp/demo-out/x'
+run_case BLOCK "リンク元が docs/rules 外の .claude/rules への symlink（Layer 1 指摘）" 'ln -sf /etc/passwd .claude/rules/evil.md'
+run_case BLOCK "symlink 以外の .claude/rules 書き込み" 'echo x > .claude/rules/new.md'
+run_case ALLOW "cd - は判定不能として素通り（見逃しを承知で誤断定より安全側）" 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'
+run_case ALLOW "scratchpad 内のラボの .claude は対象外" \
+  "sed -i 's/a/b/' /tmp/claude-0/demo/$TEST_SESSION/scratchpad/lab/.claude/hooks/dummy.sh"
+run_case ALLOW "前置きトグルで .git 配下の復旧操作を通す" \
+  'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f .git/index.lock'
+
 echo "[test] 通すべきケース"
 run_case ALLOW "自セッションの scratchpad への書き込み" \
   "mkdir -p /tmp/claude-0/demo/$TEST_SESSION/scratchpad && echo hi > /tmp/claude-0/demo/$TEST_SESSION/scratchpad/a.txt"
@@ -113,6 +144,15 @@ run_case BLOCK "複数行コマンドの後方行のトグルは前の行に及�
   'rm -rf /tmp/demo-out
 echo x
 CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 true'
+
+echo "[test] TMPDIR 配下の .claude は対象外（実値で分岐を通す）"
+tmp_out=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"cp -r .claude/skills /tmp/wwg-tmpdir/.claude/skills"}}))' "$TEST_CWD" \
+  | HOME="$TEST_HOME" TMPDIR="/tmp/wwg-tmpdir" python3 "$GUARD" 2>&1)
+if [ $? -eq 0 ] && [ -z "$tmp_out" ]; then
+  PASS=$((PASS + 1)); echo "  ok   [ALLOW] TMPDIR 配下の .claude への書き込みは保護対象にしない"
+else
+  FAIL=$((FAIL + 1)); echo "  NG   TMPDIR 配下の .claude を誤ブロック: $tmp_out" >&2
+fi
 
 echo "[test] トグルによる無効化"
 toggle_out=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":"rm -rf /tmp/demo-out"}}))' "$TEST_CWD" \

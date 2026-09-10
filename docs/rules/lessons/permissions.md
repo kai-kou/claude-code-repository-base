@@ -125,7 +125,7 @@ allow/deny の評価順とレイヤー適用範囲（Bash 限定 vs 全ツール
   回帰テストは `bash tools/test_workspace_write_guard.sh`（39 ケース）と、ガード単体の `python3 .claude/hooks/lib/workspace_write_guard.py --self-test`。機密ファイルガードの回帰テストは同じ router を通すため、本ガードをトグルで切って走らせる（検証したい機密判定が別ガードのブロックでマスクされるのを防ぐ）。
 
   **読み取りまでブロックする根拠**（レビュー指摘への回答）: ホーム配下 `.claude` は書き込みだけでなく **読み取りもプロンプトになる**。headless プローブで `cat <ホーム配下 .claude のファイル> | head -3` と `grep -c . <同>` を投入したところ、両方とも `permission_denials` に記録された（拒否理由の文面も "tries to read a file outside the allowed working directory"）。ただしこの実測ラボは `permissions.allow` を持たないため、本ベースの `Bash(cat:*)` / `Bash(grep:*)` が allow 側で先に決着する可能性は残る（未確認）。**無人停止のコスト（誰も承認せず無限待ち）と代替のコスト（ネイティブ Read / Grep へ切り替える 1 往復）が非対称** なので、読み取りもブロック側に倒している。
-- **行動規範**: 一時作業はセッション scratchpad（システムプロンプトが提示するパス）かリポジトリ内で行う。ツール結果の persisted output（ホーム配下 `.claude/projects/.../tool-results/`）は **ネイティブ Read / Grep で読む**（`PermissionRequest` フックが自動承認する）。Bash で複製しない。
+- **行動規範**: 一時作業はセッション scratchpad（システムプロンプトが提示するパス）で行う（リポジトリ内で行う場合も、リポジトリ直下に一時ファイルを作って `.git/info/exclude` で除外する運用と、`.claude/` `.git/` への Bash 直書きは L-130 のとおり禁止）。ツール結果の persisted output（ホーム配下 `.claude/projects/.../tool-results/`）は **ネイティブ Read / Grep で読む**（`PermissionRequest` フックが自動承認する）。Bash で複製しない。
 
 **採らなかった案と理由**
 
@@ -140,3 +140,38 @@ allow/deny の評価順とレイヤー適用範囲（Bash 限定 vs 全ツール
 **判定基準**: 「このコマンドが書き込む / 消す先は、作業ディレクトリかセッション scratchpad の中か？」→ No なら、無人セッションでは承認待ちで止まると考える。
 
 **保持理由**: 無人ルーティンの無限停止は「失敗せずに何も進まない」最も気づきにくい停止形態で、クラウド運用のあるプロジェクト全てで再発しうる。サンドボックス設定がクラウドで無効という前提も、設定を読んだだけでは分からず繰り返し誤解される。
+
+---
+
+## L-130: 無人ルーティンが「リポジトリ内の `.claude/` `.git/` への Bash 書き込み」と「未許可 MCP ツール」の承認プロンプトで停止する（2026-09-10・#618）
+
+**症状**: 下流 3 リポジトリの scheduled_trigger セッション（`get_session` で `origin: scheduled_trigger` を確認）が承認プロンプトを出したまま停止した。
+
+| # | 下流 | 操作 | プロンプト |
+|---|------|------|-----------|
+| C1 | 下流 A（スプリント系ルーティン） | Bash `sed -i ... .claude/hooks/pre-tool-use-router.sh`（ハーネスの変異テスト中） | `Claude requested permissions to edit ... which is a sensitive file.` |
+| C2 | 下流 B（スケジューラー系ルーティン） | 下流固有 youtube MCP サーバの `list private` | 「拒否 / 一度だけ許可」のみで「常に許可」が無い |
+| C3 | 下流 C（配信系ルーティン） | Bash `echo "tmp-content-issues.json" >> .git/info/exclude` | run 許可プロンプト |
+
+**根本原因（公式一次情報 + 実測・議論記録 `content/discussions/routine-permission-prompts-20260910/`）**
+
+1. **C1 / C3 の機構**: `.claude` と `.git` は Claude Code のハードコード **Protected paths**（[permission-modes](https://code.claude.com/docs/en/permission-modes)「Protected paths」節: "Writes to a small set of paths are never auto-approved, except in `bypassPermissions` mode"・auto モードは "Routed to the classifier"）。**`permissions.allow` は事前承認に使えない**（"rules in settings files do not pre-approve protected-path writes. The safety check runs before Claude Code evaluates allow rules" — `Edit(.claude/**)` への glob 修正は無効）。シェルのリダイレクト先も同じ判定を受ける（[permissions](https://code.claude.com/docs/en/permissions)「Redirections」節）。classifier の判定は文脈依存で、権限フック自体の書き換え（C1）は ask に倒れ、無人セッションには応答者がいない。
+2. **ハーネスの盲点**: `workspace_write_guard.py` の `is_safe()` が cwd 内を無条件に安全扱いしていたため、リポジトリ自身の `.claude/**`・`.git/**` への Bash 書き込みが classifier に回る前に差し戻されなかった（`analyze()` 実行で素通りを確認）。auto モードのシステムプロンプト（"make file changes with sed, heredocs ... rather than ... Edit"）がこの経路を積極的に誘発する。
+3. **C3 の上流原因**: 一時ファイルをセッション scratchpad ではなくリポジトリ直下に作り、除外のために `.git/` を触った。
+4. **C2**: (a) trigger 定義の `allowed_tools` に MCP ツールが無く `permissions.allow` にも未登録（`list_triggers` で確認）に加え、(b) 「常に許可」が無い UI は `_meta["anthropic/requiresUserInteraction"]` 付きツールの仕様どおり（CHANGELOG v2.1.255・[mcp](https://code.claude.com/docs/en/mcp)）。(b) なら **allow に書いても全モードで毎回プロンプト**（`dontAsk` のみ deny）で、静的チェックでは (a)/(b) を区別できない。ベースに「MCP サーバ追加時に allow へ何を書くか」「`requiresUserInteraction` 付きツールを無人ルーティンから呼ばない」という規約が無かった。
+
+**headless プローブでは再現しなかった（正直な記録）**: `claude -p --permission-mode auto`（v2.1.267・sonnet/opus・PermissionRequest 配線あり/なし・計 8 パターン）で C1/C3 相当は全て `permission_denials=[]`。これは [headless](https://code.claude.com/docs/en/headless) の仕様（classifier が approve すれば素通り、ask になったときだけ host 無しで deny）と矛盾せず、「protected path は必ず classifier に回る（allow では即決できない）が、判定結果は操作の実態・CLAUDE.md 文脈に依存する」が正しい読み。**再現できないことは対策不要の根拠にならない**（classifier に回った時点で無人セッションには停止リスクがある）。L-127 の「1 バージョン限りの誤診」とは構造が違う（Protected paths は "This prevents accidental corruption of ... Claude's own configuration" と明記された恒久設計で、v2.1.255〜267 に変更なし）。
+
+**対策（採用）**
+
+- **ハーネス**: `workspace_write_guard.py` に `_repo_protected()` を追加し、cwd 内でも `.claude/**`（`.claude/rules`・`.claude/worktrees` を除く）と `.git/**` への Bash 書き込みを **classifier に回る前に差し戻す**。差し戻し文言は対象ごとに代替を出し分ける（`.claude` → ネイティブ Edit / Write、symlink → `tools/check_rules_sync.sh --fix`、`.git` → git コマンド + scratchpad）。`git` サブコマンド自体・読み取り・`ln -s ../../docs/rules/x.md .claude/rules/x.md` の正規手順は誤ブロックしない（自己テスト・`tools/test_workspace_write_guard.sh` の件数は各ファイルの実行結果が正。PR #619 時点で 70 件 / 71 件）。`.vscode` / `.husky` 等の他 Protected paths は証跡が無いため含めない（YAGNI）。 Layer 1 セルフレビューで実測された取りこぼし（深い位置の `.claude`・worktree 内の `.claude`・`mv` の移動元・`.claude/rules` へのリンク元が `docs/rules` 外の symlink・`cd -` の誤追跡・scratchpad ラボの誤ブロック）も同 PR で塞いだ。
+- **行動規範**: CLAUDE.md「やってはいけないこと」に、リポジトリ内 `.claude/` `.git/` の Bash 直書き禁止と scratchpad 運用を追加。
+- **MCP（規約・下流向け）**: 下流が MCP サーバを追加したら、無人ルーティンが呼ぶツールを `permissions.allow` に `mcp__<server>` / `mcp__<server>__*` / 個別名で登録する（通常ツールは allow 一致で classifier を経由せず即決着する・[permissions](https://code.claude.com/docs/en/permissions) MCP ルール節。`mcp__*` のようなサーバ名の glob は無効）。`requiresUserInteraction` 付きツールは allow では解決しないため、**無人ルーティンが呼ぶスキルの `allowed-tools` / コネクタから外す**（Routines 公式の "Remove any connectors the routine doesn't need" と同じ運用）。 参照されているが allow に無いツールは `python3 tools/check_mcp_allowlist.py` で静的に洗い出せる（非ブロッキング警告。`requiresUserInteraction` の有無は静的に判別できないため「登録すれば直る」は保証しない・#620 で精度向上）。
+
+**採らなかった案**: `permissions.allow` の glob 修正（無効・上記）/ `PermissionRequest` の matcher に Bash を追加・ルーティンの `permission_mode` を `bypassPermissions` `dontAsk` に緩める（承認レイヤーを外す解・L-129 の不採用を維持）/ 「-p で再現しないので見送る」（上記）。
+
+**残余リスク**: `python3 -c` / `node -e` / `perl -i` / `awk -i inplace` 経由の保護パス書き込みは字面判定で塞げない（2 実装で確認）。`.git/hooks/*` のインストールや `rm .git/index.lock` 等の復旧操作も BLOCK になる（脱出ハッチ `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` で通す）。scheduled_trigger セッションの実 permission mode（auto 相当か、`create_trigger` の `permission_mode` 未指定による Manual 継承か）は API から断定できず、Routines 公式の "no approval prompts during a run" は観測と字面上矛盾する（両論を記録・後続 Issue）。
+
+**判定基準**: 「このコマンドが書き込む先はリポジトリ内でも `.claude/` か `.git/` の中か？」→ Yes なら Bash では書かない（ネイティブ Edit / Write・git コマンド）。「一時ファイルをリポジトリ直下に作ろうとしていないか？」→ scratchpad に置く。
+
+**保持理由**: Protected paths は「作業ツリーの中なら安全」という直感に反する恒久仕様で、auto モードの「Bash で編集せよ」指示と組み合わさると全ての下流ルーティンで再発する。L-129（cwd の外）と対で常駐させる。

@@ -84,6 +84,7 @@ Hot 層に 700B 強を足すのと同じ重みを持つ。
 | 日付 | 実測 | 差分 | 追加の正当化 / 相殺 |
 |---|---:|---:|---|
 | 2026-09-05 | 85,521 B | 基準 | **#580 の再棚卸し後の到達値**（増減ログ 4 行到達の合図 ① を受けての再点検。前回基準（2026-09-02・78,724B）からの増分 +6,797B・+8.6% は超過閾値（+10%）に遠く、実測とログ最新行の乖離もゼロ）。#324/#369/#504 と同じ判断軸（「代替の強制レイヤが既にあるか」）で 13 ファイル全件を再点検したが、削減対象は 0 件だった。逐語重複（コマンド列・手順の丸ごと重複）は `session-safety-rules.md` G-1/G-3 の `git fetch origin +main:refs/remotes/origin/main` 1 行のみで、独立したシナリオ（新ブランチ作成前 / 完了報告直前の検証）でそれぞれ単独コピペ実行する前提のため統合を見送った（統合すると可読性が落ち削減効果も 1 行未満）。今回の増分 3 行（`completion-report-rules.md` §1.2・`lessons-core.md` L-127 訂正・L-129 索引 + `CLAUDE.md` 1 行）はいずれも #369/#504 の削減対象外 3 区分（実観測ベースの行動規範・A-1〜A-6・Haiku 明示テンプレート相当）に該当し、機械強制レイヤの代替が無い（`stop-completion-report-check.sh` は「不適格」を判定するのみで書き方の手本は示さない・L-129 索引は症状 → Warm 層参照のポインタで既に最小）。残る 10 本（`agent-team-summary.md` / `core-principles.md` / `datetime-rules.md` / `pr-review-flow-summary.md` / `session-compression-rules.md` / `session-concurrency-rules.md` / `session-safety-rules.md` / `session-sprint-rules.md` / `user-confirmation-minimization.md` / `user-instruction-issue-rules.md` / `user-notification-triage.md`）も個別に確認したが、#504 時点から変更がないか、既に要旨のみで代替レイヤ確認済みのため残置とした。増減ログをここで打ち切り、本行を新基準とする（`tools/check_hot_budget.py` で機械検証） |
+| 2026-09-10 | 85,607 B | +86 B | #618: `CLAUDE.md`「やってはいけないこと」にリポジトリ内 `.claude/` `.git/` の Bash 直書き禁止と scratchpad 運用を 1 項目追加、`lessons-core.md` の Warm 層索引 1 行に L-130 を併記。いずれも実観測（下流 3 ルーティンの承認待ち停止）ベースの行動規範で、`workspace_write_guard.py` の機械ブロックは事後の差し戻しであり着手前の規範を代替しない |
 
 **記載予算（基準）は ~85.5KB / ~21,000 トークン**（#580 再校正・下記ツールが機械検証する）。
 

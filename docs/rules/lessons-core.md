@@ -14,7 +14,7 @@
 | サブエージェント / Agent Teams の回答が空・期待外の形式で返る・フックが偽の観測を注入する | `docs/rules/lessons/agent-delegation.md`（L-121/L-122） |
 | これまで `Skill` ツールで呼べていたビルトイン機能が `disable-model-invocation` で失敗する（起動経路の移動） | `docs/rules/lessons/skill-routing.md`（L-123）・`native-fallback-rules.md` §2.5 |
 | auto モードなのに Bash の `grep` 系コマンドで承認プロンプトが出る・自動モードで権限プロンプトが増えた | `docs/rules/lessons/permissions.md`（L-127） |
-| 無人ルーティンが承認プロンプトのまま停止している・作業ツリー外への書き込みがフックにブロックされた | `docs/rules/lessons/permissions.md`（L-129） |
+| 無人ルーティンが承認プロンプトのまま停止している・作業ツリー外や `.claude/` `.git/` への書き込みがフックにブロックされた・MCP ツールの承認に「常に許可」が無い | `docs/rules/lessons/permissions.md`（L-129 / L-130） |
 | PR レビュー・CI 系 | `docs/rules/lessons/pr-review.md` / `ci-cd.md` |
 | その他カテゴリ | `docs/rules/lessons/<category>.md` |
 

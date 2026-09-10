@@ -732,3 +732,25 @@
   出力先をセッション scratchpad かリポジトリ内へ移すこと。どうしても外部パスが要る箇所は
   `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` を付けて実行できるが、無人ルーティンから呼ぶ経路では
   承認プロンプトで停止する前提になるため推奨しない。
+
+
+## 2026-09-10（Issue #618）リポジトリ内の `.claude/` `.git/` への Bash 書き込みも機械ブロックする（保護パス）
+
+- **変更内容**: `.claude/hooks/lib/workspace_write_guard.py` を拡張し、作業ツリーの **内側** でもリポジトリ自身の
+  `.claude/**`（`.claude/rules`・`.claude/worktrees` を除く）と `.git/**` への Bash 書き込み（`sed -i` / cp / mv /
+  tee / リダイレクト）を承認プロンプトになる前に差し戻す。両者は Claude Code のハードコード Protected paths で
+  `permissions.allow` では事前承認できず、auto モードでも classifier の個別判定に回るため、無人ルーティンでは
+  ask に倒れた時点で停止していた（下流 3 リポジトリで実発生。根本原因・不採用案・残余リスクは
+  `docs/rules/lessons/permissions.md` L-130、議論記録は `content/discussions/routine-permission-prompts-20260910/`）。
+- **下流で必要な手動手順**: ① `CLAUDE.md`「やってはいけないこと」に 1 項目追加している（リポジトリ内
+  `.claude/` `.git/` を Bash で直接書き換えない・一時ファイルはセッション scratchpad に作り `.git/info/exclude` で
+  除外しない）。**下流の `CLAUDE.md` は保護されるため自動反映されない**。同じ規範を自リポジトリの `CLAUDE.md` へ
+  転記すること。② `.claude/hooks/*.sh` や `.claude/skills/*/SKILL.md` を Bash の `sed -i` で書き換えるスキル・
+  手順（変異テスト等）を持つ下流は、ネイティブ Edit / Write ツールに切り替えること（symlink 作成は
+  `bash tools/check_rules_sync.sh --fix`）。`.git/hooks/*` のインストール等どうしても必要な箇所は
+  `CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1` を付けて実行できる（無人経路では非推奨）。③ 下流固有の MCP サーバ
+  （例: youtube）を無人ルーティンから呼ぶ場合、そのツールを `.claude/settings.json` の `permissions.allow` に
+  `mcp__<server>` / `mcp__<server>__*` / 個別名で登録すること。`_meta["anthropic/requiresUserInteraction"]` 付きの
+  ツール（承認 UI に「常に許可」が出ないもの）は allow に書いても毎回プロンプトになるため、無人ルーティンが
+  呼ぶスキルの `allowed-tools` / コネクタから外すこと。参照されているが allow に無いツールは
+  `python3 tools/check_mcp_allowlist.py` で洗い出せる（除外リストは `config/mcp_allowlist_check_ignore.txt`）。

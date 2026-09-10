@@ -16,9 +16,17 @@
   本ガードはプロンプトに落ちる前にブロックし、代替（セッション scratchpad / ネイティブ Read・Grep ツール）を
   案内する。ブロックは **ツール失敗として Claude に返る** ため、無人セッションでも停止せず自己修正できる。
 
+追加の射程（#618・議論 routine-permission-prompts-20260910）:
+  作業ツリーの **内側** でも、リポジトリ自身の `.claude/**`（`.claude/rules`・`.claude/worktrees` を除く）と
+  `.git/**` への Bash 書き込み（`sed -i` / cp / mv / tee / リダイレクト等）を差し戻す。両者は Claude Code の
+  ハードコード Protected paths で、`permissions.allow` では事前承認できず auto モードでも classifier の
+  個別判定に回るため、無人ルーティンでは ask に倒れた時点で停止する（下流で実発生）。
+
 射程と限界（過信しないこと）:
   - コマンド名の列挙型で、`python3 -c "open('/etc/x','w')"` のような任意コード経由は塞げない
-    （`pre-tool-use-router.sh` の機密ファイルガードと同じ設計上の限界。残余リスクはコンテナ隔離が引き受ける）
+    （`pre-tool-use-router.sh` の機密ファイルガードと同じ設計上の限界。残余リスクはコンテナ隔離が引き受ける）。
+    保護パスについても同じで、`python3 -c` / `node -e` / `perl -i` / `awk -i inplace` 経由は素通りする
+    （2 つの独立実装で確認済み）。塞いだのは sed / cp / mv / ln / tee / リダイレクトの直書きであって根絶ではない
   - 解決できない変数（外部 env 由来）を含むパスは判定不能として素通りさせる（誤ブロックを避ける。
     同一コマンド内の `NAME=value` 代入は解決する）
   - 目的は「無人セッションの停止防止」であって権限の代替ではない。`permissions.deny` の保護とは独立
@@ -75,6 +83,45 @@ _ASSIGNMENT = re.compile(r"(?:^|[\s;&|(])([A-Za-z_][A-Za-z0-9_]*)=([^\s;&|)]+)")
 _UNRESOLVED_VAR = re.compile(r"\$\{?[A-Za-z_(]")
 # 脱出ハッチの環境変数名（セッション env / コマンド先頭の前置き代入のどちらでも効く）
 _TOGGLE_NAME = "CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD"
+
+# 作業ツリー（cwd）配下でも保護するリポジトリ内パス（#618・議論 routine-permission-prompts-20260910）。
+#
+# `.claude` と `.git` は Claude Code のハードコード Protected paths（公式 permission-modes「Protected
+# paths」節）で、`permissions.allow` では事前承認できず、auto モードでも必ず classifier の個別判定に回る。
+# 判定は文脈依存で、無人ルーティンが ask に倒れると応答者がいないまま停止する（下流で実発生:
+# `sed -i` で `.claude/hooks/pre-tool-use-router.sh` を書き換え〔C1〕・`>> .git/info/exclude`〔C3〕）。
+# 従来の is_safe() は「cwd の内側なら常に安全」と判定していたため、この 2 件はノーガードで通っていた。
+#
+# 範囲は `.claude` 全体と `.git` 全体に限る。公式 Protected paths に載る `.vscode` / `.husky` /
+# `.devcontainer` / `.cargo` / `.mvn` / `.yarn` / `.config/git` は **含めない**（サードパーティ開発ツールの
+# 設定で、下流の通常開発で Bash から日常的に編集される。実発生の証跡もない・YAGNI）。
+#
+# 判定は cwd からの相対パスの **どの深さ** でも `.claude` / `.git` セグメントを見る（`sub/.claude/hooks/x.sh` や
+# `.claude/worktrees/wt-1/.claude/hooks/x.sh` も対象。Layer 1 レビューで直下一致だけでは取りこぼすと指摘）。
+#
+# 除外:
+#   - `.claude/worktrees/<name>/**`: 公式が「Claude 自身が git worktree を置く場所」として明示的に除外。
+#     ただしその配下にさらに `.claude` / `.git` が現れたら再び保護する（worktree はリポジトリ全体の
+#     チェックアウトなので、その中のフックまで無防備にしない）
+#   - `.claude/rules/**` への **symlink 作成**（`ln -s ../../docs/rules/x.md .claude/rules/x.md`）は正規の直接
+#     Bash 手順（`docs/rules/session-compression-rules-detail.md` / `tools/check_rules_sync.sh`）なので、
+#     **リンク元が `<cwd>/docs/rules/` 配下のときだけ** 通す（リンク元を見ずに `.claude/rules` を丸ごと除外すると
+#     `ln -sf /etc/passwd .claude/rules/x.md` のような外部ファイルへのリンクを常駐ルールとして
+#     読み込ませる導線になる・Layer 1 レビュー指摘）。symlink 以外の `.claude/rules/**` 書き込みは保護する
+#     （既存 symlink 越しの書き込みは realpath で `docs/rules/` に解決されるので影響しない）
+#   - セッション scratchpad / TMPDIR 配下は対象外（ラボ用の `.claude` `.git` フィクスチャを作る正規の検証手順を
+#     止めない。実リポジトリの保護パスではない）
+#   - `git` サブコマンド自体（`git config` / `git update-index` / `git worktree` 等）は `_write_targets()` の
+#     抽出対象コマンドに `git` が無いため、この判定に渡る前に候補から外れる（誤ブロックしない）
+#   - 読み取り（`cat .claude/settings.json`）と、cwd 外へコピーする際のコピー元は対象外
+#
+# 許容している副作用: `.git/hooks/*` へのローカル hook インストール・`rm .git/index.lock` 等の復旧操作も
+# BLOCK になる。個別 allowlist は設けず、必要なら脱出ハッチ（`_TOGGLE_NAME`）で通す。本ガードは
+# 「無人セッションの停止防止」層であって権限境界ではない（脱出ハッチで外せるのは設計どおり。権限境界は
+# Claude Code 本体の Protected paths と classifier が担う）。
+_REPO_PROTECTED_DIRS = (".claude", ".git")
+_WORKTREES_DIRNAME = "worktrees"
+_RULES_SYMLINK_SOURCE = os.path.join("docs", "rules")
 
 
 def _strip_heredocs(command: str) -> str:
@@ -312,9 +359,73 @@ def _write_targets(tokens: list[str]) -> list[str]:
         targets.extend(operands[1:])
     elif name in WRITE_ALL_ARGS:
         targets.extend(operands)
+    elif name == "mv":
+        # 移動元も消える（= 書き込み扱い）。`mv .claude/hooks/x.sh /tmp/out` はフックの除去（Layer 1 指摘）
+        targets.extend(operands)
     elif name in WRITE_LAST_ARG and operands and not flag_dests:
         targets.append(operands[-1])
     return targets
+
+
+def _repo_protected(path: str, cwd: str) -> str | None:
+    """`path`（正規化済み絶対パス）が cwd 配下の `.claude/**`・`.git/**` に当たるか。
+
+    cwd からの相対パスをセグメント単位で走査し、どの深さでも `.claude` / `.git` が現れたら
+    その名前（ログ用）を返す。`.claude/worktrees/<name>/` は読み飛ばし、その配下でさらに
+    `.claude` / `.git` が現れたら再び保護する。一致しなければ None。
+    """
+    if not _under(path, cwd) or path == cwd:
+        return None
+    parts = os.path.relpath(path, cwd).split(os.sep)
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        if part == ".claude" and i + 1 < len(parts) and parts[i + 1] == _WORKTREES_DIRNAME:
+            i += 3  # `.claude/worktrees/<name>` を読み飛ばして続きを走査
+            continue
+        if part in _REPO_PROTECTED_DIRS:
+            return part
+        i += 1
+    return None
+
+
+def _legit_rules_symlink(tokens: list[str], dest_resolved: str, cwd: str, home: str) -> bool:
+    """`ln [-s] <src> <cwd>/.claude/rules/<name>` で、リンク元が `<cwd>/docs/rules/` 配下なら正規手順。"""
+    index = _command_index(tokens)
+    if index is None or os.path.basename(tokens[index]) != "ln":
+        return False
+    if os.path.dirname(dest_resolved) != os.path.join(cwd, ".claude", "rules"):
+        return False
+    operands = [a for a in _strip_redirection_args(tokens[index + 1:]) if not a.startswith("-")]
+    if len(operands) < 2:
+        return False
+    src = operands[0]
+    if src.startswith("~"):
+        src = home + src[1:]
+    # 相対リンク元はリンクを置くディレクトリ基準で解決される（`../../docs/rules/x.md` はこの形）
+    src_resolved = os.path.realpath(src if src.startswith("/") else os.path.join(os.path.dirname(dest_resolved), src))
+    return _under(src_resolved, os.path.join(cwd, _RULES_SYMLINK_SOURCE))
+
+
+def _repo_protected_hint(protected: str) -> str:
+    """ブロック理由に添える代替手段（保護対象ごとに出し分ける）。
+
+    一律に「ネイティブ Edit を使え」と案内すると、symlink 作成のように Edit で代替できない操作で
+    回避経路（python3 -c 等）へ流れやすい。代替が存在しない理由を減らすための出し分け。
+    """
+    if protected == ".git":
+        return (
+            "  → .git 配下を Bash で直接書き換えない。git コマンド（git config / git update-index / "
+            "git stash 等）で操作すること。一時ファイルはリポジトリ直下に作らずセッション scratchpad に置く"
+            "（.git/info/exclude で除外する必要自体をなくす）。"
+        )
+    return (
+        "  → .claude 配下（.claude/worktrees を除く）はネイティブ Edit / Write ツールで"
+        "書き換えること（PermissionRequest フックが自動承認する。settings.json / settings.local.json だけは"
+        "設計どおりユーザー確認に残る・#238）。.claude/rules への symlink 作成は "
+        "`bash tools/check_rules_sync.sh --fix` か `ln -s ../../docs/rules/<name>.md .claude/rules/<name>.md`"
+        "（リンク元が docs/rules/ 配下のときだけ通る。Edit / Write は symlink を作れない）。"
+    )
 
 
 def _path_like(tokens: list[str]) -> list[str]:
@@ -357,9 +468,21 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
                 )
 
         # (2) 作業ディレクトリ・セッション一時領域の外への書き込み / 削除
+        # (2') cwd の内側でも、リポジトリ自身の .claude/** と .git/** への Bash 書き込みは保護する
+        #      （#618・C1/C3）。is_safe() は cwd 内を無条件に True にするため、必ずその前に判定する。
         for token in _write_targets(tokens):
             resolved = _resolve(token, current_cwd, home)
             if resolved is None:
+                continue
+            in_tmp = _session_tmp_ok(resolved, session_id) or any(_under(resolved, b) for b in safe_bases[1:])
+            protected = None if in_tmp else _repo_protected(resolved, cwd)
+            if protected is not None:
+                if _legit_rules_symlink(tokens, resolved, cwd, home):
+                    continue
+                reasons.append(
+                    f"リポジトリ内の保護パス（{protected}）への Bash 書き込み: {resolved}\n"
+                    + _repo_protected_hint(protected)
+                )
                 continue
             if is_safe(resolved) or _under(resolved, home_claude):
                 continue  # 後者は (1) で報告済み
@@ -372,8 +495,15 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
         # (3) `cd` の効果を次のセグメントへ引き継ぐ
         index = _command_index(tokens)
         if index is not None and os.path.basename(tokens[index]) == "cd":
-            operands = [t for t in tokens[index + 1:] if not t.startswith("-")]
-            current_cwd = _resolve(operands[0], current_cwd, home) if operands else home
+            raw = tokens[index + 1:]
+            if raw and raw[0] == "-":
+                # `cd -`（直前のディレクトリへ戻る）は追跡していないので判定不能にする。`-` をフラグ扱いで
+                # 落として home へ移動したと誤断定すると、以降の相対パスが実在しない場所へ解決され
+                # 保護パスへの書き込みを見逃す（Layer 1 指摘）
+                current_cwd = None
+            else:
+                operands = [t for t in raw if not t.startswith("-")]
+                current_cwd = _resolve(operands[0], current_cwd, home) if operands else home
 
     # 同一理由の重複を除く（順序は維持）
     return list(dict.fromkeys(reasons))
@@ -398,6 +528,43 @@ def _self_test() -> int:
         (True, 'rm -rf /tmp/claude-0/proj/other-session/scratchpad'),
         (True, 'curl "https://x.example/a?b=1&c=2" -o /tmp/demo-out/report.json'),
         (True, 'cat <<EOF\nintro\nrm -rf /tmp/demo-out\n'),  # 未終端 heredoc は解析対象へ戻す
+        # --- リポジトリ内保護パス（#618・C1 / C3 の実例と派生） ---
+        (True, 'sed -i "s/a/b/" .claude/hooks/pre-tool-use-router.sh'),  # C1 相当
+        (True, 'cd /home/user/demo-repo && grep -n "x" .claude/hooks/r.sh && sed -i "/x/d" .claude/hooks/r.sh && diff -q /tmp/r.sh.bak .claude/hooks/r.sh && echo NO_CHANGE || echo CHANGED'),  # C1 の実コマンド形
+        (True, 'echo "tmp-content-issues.json" >> .git/info/exclude'),  # C3 相当
+        (True, 'cp .claude/hooks/a.sh .claude/hooks/b.sh'),
+        (True, 'rm -rf .git/hooks/pre-commit'),
+        (True, 'sed -i "s/a/b/" .claude/settings.json'),
+        (True, 'sed -i "s/a/b/" .claude/skills/foo/SKILL.md'),  # hooks 以外の .claude/** も保護
+        (True, 'echo x >> .claude/agents/reviewer.md'),
+        (True, 'echo x | tee -a .claude/hooks/x.sh'),
+        (True, 'cd .claude/hooks && sed -i "s/a/b/" dummy.sh'),  # cd 追従
+        (True, 'ln -sf ../../docs/x.md .claude/skills/foo/SKILL.md'),  # rules 以外への symlink は除外しない
+        (False, 'ln -sf ../../docs/rules/x.md .claude/rules/x.md'),  # 正規手順（session-compression-rules-detail.md）
+        (False, 'echo x > .claude/worktrees/wt-1/marker'),  # 公式の明示除外
+        (False, 'git config core.excludesfile .git/info/exclude'),  # git サブコマンド自体は対象外
+        (False, 'git update-index --assume-unchanged path/to/file'),
+        (False, 'git worktree add ../wt-x'),
+        (False, 'bash scripts/apply-to-repo.sh'),  # 内部の cp -a はこの層から不可視（字面ベースの限界）
+        (False, 'cat .claude/hooks/pre-tool-use-router.sh'),  # 読み取りは対象外
+        (False, 'echo x > docs/a.md'),
+        (False, f'cp -r .claude/skills /tmp/claude-0/proj/{sid}/scratchpad/skills'),  # コピー元は対象外
+        (False, 'python3 tools/check_rules_sync.sh --fix'),
+        # --- Layer 1 セルフレビュー（PR #619）で実測された取りこぼし ---
+        (True, 'sed -i "s/a/b/" sub/.claude/hooks/x.sh'),  # 深い位置の .claude も保護
+        (True, 'sed -i "s/a/b/" .claude/worktrees/wt-1/.claude/hooks/x.sh'),  # worktree 内のフックは再び保護
+        (True, 'mv .claude/hooks/pre-tool-use-router.sh /tmp/demo-out/x'),  # 移動元の除去
+        (True, 'mv .git/hooks/pre-commit ./saved-hook.sh'),
+        (True, 'ln -sf /etc/passwd .claude/rules/evil.md'),  # リンク元が docs/rules 外
+        (True, 'ln -sf ../../tools/x.py .claude/rules/x.md'),
+        (True, 'echo x > .claude/rules/new.md'),  # symlink 以外の .claude/rules 書き込みは保護
+        (True, 'cd .claude/hooks && cd .. && sed -i "s/a/b/" hooks/x.sh'),  # cd .. 追従
+        (True, 'ln -sf ../../docs/rules/x.md .claude/rules/x.md && sed -i "s/a/b/" .claude/hooks/x.sh'),
+        (False, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),  # cd - は判定不能（素通り・見逃しを承知で誤断定より安全側）
+        (False, f'sed -i "s/a/b/" /tmp/claude-0/proj/{sid}/scratchpad/lab/.claude/hooks/dummy.sh'),  # scratchpad のラボは対象外
+        (False, f'cd /tmp/claude-0/proj/{sid}/scratchpad/lab && echo x >> .git/info/exclude'),
+        (False, 'ln -s ../../docs/rules/new-rule.md .claude/rules/new-rule.md'),
+        (False, 'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 cp local-hook.sh .git/hooks/pre-commit'),  # 脱出ハッチは設計どおり効く
         (False, f'mkdir -p /tmp/claude-0/proj/{sid}/scratchpad && echo hi > /tmp/claude-0/proj/{sid}/scratchpad/a.txt'),
         (False, 'echo hi > ./notes.md'),
         (False, 'rm -rf node_modules'),

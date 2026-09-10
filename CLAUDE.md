@@ -215,6 +215,7 @@ frontmatter は公式仕様（`name` / `description` 必須・`model` / `tools` 
 - 1 箇所しか使わない抽象化レイヤーを先回りで追加しない（YAGNI）。着手前に「より単純な解から始めているか」を一度問う
 - `.claude/settings.local.json` に環境変数を書き込まない（クラウド環境ではセッション間で消える）
 - ツール結果の persisted output（ホーム配下 `.claude/projects/.../tool-results/`）を Bash で複製・加工しない（ネイティブ Read / Grep で読む）。クラウドではサンドボックスが起動せず、作業ツリー外を触る Bash は承認プロンプトになって **無人ルーティンが無限停止する**（L-129・`pre-tool-use-router.sh` が機械ブロックする）
+- リポジトリ内の `.claude/`（`.claude/rules` の symlink を除く）と `.git/` を Bash で直接書き換えない（`sed -i` / リダイレクト / cp → ネイティブ Edit・Write か git コマンド）。一時ファイルはセッション scratchpad に作り、リポジトリ直下に作って `.git/info/exclude` で除外しない。どちらも Claude Code の保護パスで `permissions.allow` では事前承認できず、無人ルーティンが承認待ちで停止する（L-130・同フックが機械ブロックする）
 - ツール結果を自分で書いて事実と思い込まない（confabulation）。CI・マージ・レビュー・ファイル存在等の外部状態は実際に返ってきたツール結果でのみ断定し、ツール呼び出しを発したら実結果が返るのを待つ。ユーザー発言は逐語で扱い、所感を命令形に書き換えない（L-113）
 
 ## 日時表記ルール（SSOT: `datetime-rules.md`）

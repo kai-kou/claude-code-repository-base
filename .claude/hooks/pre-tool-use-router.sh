@@ -229,11 +229,14 @@ if _sensitive_file_access; then
 デグレ検証: bash tools/test_sensitive_file_guard.sh"
 fi
 
-# 承認プロンプトに落ちる Bash を、プロンプトになる前に差し戻す（無人ルーティンの無限停止防止・#578）
+# 承認プロンプトに落ちる Bash を、プロンプトになる前に差し戻す（無人ルーティンの無限停止防止・#578 / #618）
 #
 # クラウド実行環境には bwrap / sandbox-exec が無く（実測: MISSING・Seccomp 0）、settings.json の
 # sandbox.enabled は起動できない。そのため「作業ディレクトリ・セッション一時領域の外への書き込み /
 # 削除」は auto モードの classifier が自動承認せず、無人セッションでは承認待ちのまま停止する。
+# #618 で射程を拡張: 作業ツリーの **内側** でも、リポジトリ自身の `.claude/**`（worktrees を除く）と
+# `.git/**` への Bash 書き込みは Claude Code の Protected paths として classifier に回る（allow では
+# 事前承認できない）ため、同じくここで差し戻す（詳細は lib/workspace_write_guard.py 冒頭・L-130）。
 # ここでブロックすると Claude にはツール失敗として返るため、代替経路へ自己修正できる。
 if _wwg_reason=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/lib/workspace_write_guard.py" 2>/dev/null); then
   :
