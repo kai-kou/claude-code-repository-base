@@ -44,6 +44,21 @@
 #     下流のセッションが起動不能になる／ルールが壊れた形で読まれる、という失敗を構造的に断つ）。
 set -euo pipefail
 
+# 自己上書き対策（Issue #33）: SYNC_PATHS が scripts/ を含むため、`bash scripts/apply-to-repo.sh`
+# の形（オプション B）でローカル実行すると、同期処理が実行中のこのファイル自身を書き換え、
+# bash の逐次読み込み位置とファイル上のバイトオフセットがずれて構文エラーで異常終了する（実機発生）。
+# 未 re-exec かつ実ファイルから起動された場合（`curl | bash` 等の stdin 実行では BASH_SOURCE[0] が
+# 実ファイルにならないため対象外）は、自分自身を一時コピーへ退避してそこから再実行する。
+if [ -z "${_APPLY_TO_REPO_REEXEC:-}" ] && [ -f "${BASH_SOURCE[0]:-}" ]; then
+  SELF_TMP_DIR="$(mktemp -d)" || { echo "自己コピー用の一時ディレクトリ作成に失敗しました" >&2; exit 1; }
+  SELF_TMP="$SELF_TMP_DIR/apply-to-repo.sh"
+  cp -- "${BASH_SOURCE[0]:-}" "$SELF_TMP"
+  chmod +x "$SELF_TMP"
+  export _APPLY_TO_REPO_REEXEC=1
+  export _APPLY_TO_REPO_REEXEC_TMPDIR="$SELF_TMP_DIR"
+  exec bash "$SELF_TMP" "$@"
+fi
+
 BASE_REPO="kai-kou/claude-code-repository-base"
 REF="main"
 TARGET_SLUG=""
@@ -146,7 +161,9 @@ $DRY_RUN && log "*** DRY-RUN モード（コピーは行いません）***"
 
 # --- 2. ベースの取得（git が一次経路。gh はローカル互換のフォールバック）---
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# re-exec 時の自己コピー用一時ディレクトリ（$_APPLY_TO_REPO_REEXEC_TMPDIR）も
+# 同じ trap でまとめて削除する（同一シグナルの trap は後勝ちで上書きされ累積しないため）。
+trap 'rm -rf "$TMP" "${_APPLY_TO_REPO_REEXEC_TMPDIR:-}"' EXIT
 CLONE_DIR="$TMP/base"
 
 fetch_base() {
