@@ -31,6 +31,20 @@
 
 ---
 
+## 2026-09-11（Issue #627）PR 前フレッシュ文脈レビューと REVIEW.md 較正の導入 — レビュー順序・記録先・Layer 0 の変更
+
+**変更内容**:
+- `self-reviewer` に Step 3.5 を追加: `has_code` または `high_risk` の差分（データのみを除く）は PR 作成前に `Skill(code-review)` を `--pre-pr` で実行し、CONFIRMED を修正してから PR を作る。PR 本文「セルフレビュー結果」に `PR 前レビュー:` 1 行を書く
+- `code-review` の投稿ポリシーを改訂（#461 → #627）: CONFIRMED のみ行単位インライン（NIT は上限 3 件）、PLAUSIBLE と上限超 NIT はレビュー本文に集約。ファインダーは検出専任（修正案は反証後の CONFIRMED にだけ付ける）。較正はリポジトリ直下の `REVIEW.md` を全文注入
+- Layer 0（`tools/self_review_check.py`）に `bash -n` / Python 構文検査（Error）、変更フック・ツールに対応する `tools/test_<name>.sh` の自動実行（Error・`SELF_REVIEW_SELFTEST=warn` で降格）、shellcheck / ruff の任意 Warning を追加
+- `pre-pr-create-check.sh` に PR 本文チェック（`Session-Id:`・「テスト・確認内容」の実行コマンド・`PR 前レビュー:` 記録・`high_risk` 時のエッジケース表）を非ブロッキング Warning として追加。`CLAUDE_BASE_DISABLE_PR_BODY_CHECK=1` で無効化可
+- `tools/discussion_review_trigger.py` の Layer 2 起動条件に `high_risk`（`detect_pr_diff_type.assess_risk`）を追加
+
+**下流で必要な手動手順**:
+1. `apply-to-repo.sh` 再実行で `REVIEW.md` がリポジトリ直下に配置される（`PROTECT_PATHS`・既存があれば保護され `REVIEW.md.base` が並置される）。配置後に「必ず確認すること（本 repo 固有）」と「報告しないもの」を自プロジェクトの成果物種別に合わせて書き換える（ベースの項目はフック・ツール中心）
+2. 変更したフック / ツールに `tools/test_<name>.sh`（ハイフンはアンダースコアでも可）があると PR 前ゲートで自動実行され、失敗すると PR 作成がブロックされる。壊れたまま放置しているテストがあれば先に直すか、一時的に `SELF_REVIEW_SELFTEST=warn` で降格する
+3. PR 本文テンプレート（`docs/rules/pr-review-flow.md`）に `PR 前レビュー:` 行・「テスト・確認内容」の実行コマンド・`high_risk` 時の「エッジケース表」が加わった。プロジェクト固有の PR テンプレートを持っている場合は同じ項目を足す（欠落はフックが Warning するだけでブロックしない）
+
 ## 2026-09-04（Issue #558）auto モード承認プロンプト多発の根本原因確定 — `--exclude` 自動付与フックの撤去と権限プローブの新設
 
 **変更内容**:

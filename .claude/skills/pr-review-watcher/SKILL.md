@@ -24,7 +24,7 @@ PR 作成後に **Claude 自身が Layer 1 セルフレビュー（自前 `code-
 ## Layer 2 レビュー自動起動（Issue #97・ネイティブ化 #193）
 
 PR 作成・AI レビュー依頼の直後に `discussion_review_trigger.py`（要否判定器）を呼び出す。
-差分 ≥300行 または `type:security`/`type:breaking-change` ラベル付きの PR には
+差分 ≥300行 / `type:security`・`type:breaking-change` ラベル / `high_risk` 差分（#627）の PR には
 自動的に Layer 2 議論型レビューを追加実行する。
 
 クラウド環境（gh CLI 不可）では `mcp__github__pull_request_read` で取得した値を渡す:
@@ -105,7 +105,7 @@ Layer 0+1 通過後 : 即自動マージ（外部レビュアー応答待ちな�
 
 | Step | 内容 |
 |------|------|
-| 1 | Layer 1 セルフレビュー実行（自前 `code-review` スキル・`Skill(code-review)`）+ 既存レビュー状態の取得。**指摘は全件 PR の行単位インラインコメントで記録し、指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461・手順は code-review スキル Step 3-A） |
+| 1 | Layer 1 セルフレビュー実行（自前 `code-review` スキル・`Skill(code-review)`）+ 既存レビュー状態の取得。**CONFIRMED は PR の行単位インラインコメントで記録し（NIT は上限 3 件）、PLAUSIBLE と上限超 NIT は本文に集約する。指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461 → #627・手順は code-review スキル Step 3-A） |
 | 2 | 指摘の分類（修正対象 / スキップ）。CI 失敗・人手コメントの有無を確認 |
 | 3 | 指摘への自動対応（修正コミット or スキップ → スレッド返信 → **Resolve 必須**） |
 | 4 | Layer 0（機械ゲート）+ Layer 1 通過の確認。**`check_pending_pr_reviews.py --verify-layer1 <PR番号>` で Layer 1 投稿済みかを機械検証**（#462・挙動は reference.md Step 4） |

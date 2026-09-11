@@ -152,3 +152,21 @@ For example, a `code-review` skill in your project's `.claude/skills/` replaces 
 重複対策は「pending 破棄」と「同一ラウンド内のバッチ dedup」に限定する。
 また、失敗した指摘の集約記録に `update_pull_request(body=...)` を使わない（全文置換で PR 説明文を破壊する）。
 `add_issue_comment` へ 1 回だけまとめて投稿する。
+
+---
+
+## L-131: 同一文脈のセルフレビューは自己修正盲点を越えられない。フレッシュ文脈レビューは PR の前に置く（2026-09-11・#627）
+
+**パターン**: 実装 → `self-reviewer` Step 2（同じセッションがチェックリストで見返す）→ PR 作成 → `code-review`
+（初めての第三者視点）という順序のため、PR 後の Layer 1 に指摘が集中する。直近 22 PR の指摘 121 件は修正率 79%・
+誤検知 4%（大半が実欠陥）で、1 コンポーネント（シェルコマンド解析ガード）だけで 21% を占めた。
+「テストのテスト」（ロジックを外しても緑の vacuous test）と「自分の要約を疑わない」（Spec 忠実性）が典型的な死角。
+
+**根本原因**: 自分起因の誤りは同一文脈では 64.5% で修正に失敗する（Self-Correction Bench・arXiv:2507.02778）。
+レビューの厳しさではなく **順序** の問題。
+
+**対策（#627）**: ① `self-reviewer` Step 3.5 で `Skill(code-review)` を `--pre-pr` で実行し CONFIRMED を修正してから
+PR を作る（`has_code` または `high_risk`。データのみの差分はスキップ）② `REVIEW.md` で較正（検証バー・Nit 上限 3・
+PLAUSIBLE は本文列挙・再レビュー収束）③ Layer 0 に構文検査と対応テストの自動実行、PR 本文の検証証跡チェック。
+対照例 #586（PR 前に観点別レビュー実施 → PR 後 0 件）。効果は Layer 1 の JSONL 計測（指摘ゼロ PR 率・
+PR あたり CONFIRMED 件数）で確認する。

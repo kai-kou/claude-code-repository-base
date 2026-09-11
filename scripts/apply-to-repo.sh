@@ -219,6 +219,9 @@ SYNC_PATHS=(
 PROTECT_PATHS=(
   "CLAUDE.md"
   "docs/project-mission.md"
+  # code-review スキルが Step 1 / 2 で注入するレビュー較正（Issue #627）。severity 定義・Nit 上限・
+  # repo 固有チェックは下流が成果物種別に合わせて書き換えるため、既存があれば保護する。
+  "REVIEW.md"
   # config/ のうち「下流が追記して拡張する」契約をファイル自身が明記しているもの（Issue #448）。
   # SYNC 側に置くと cp -a の無条件上書きで下流の追記が必ず失われる。
   "config/publish_events.yaml"

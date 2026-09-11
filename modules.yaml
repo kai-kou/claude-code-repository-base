@@ -83,6 +83,8 @@ modules:
       - pr_review_heartbeat.sh
       - test_pr_confirm_marker.sh   # post-pr-confirm-mark.sh × stop-pr-check.sh の e2e（#543）
       - self_review_check.py
+      - test_self_review_check.sh   # Layer 0 構文検査・対応テスト自動実行の回帰テスト（#627）
+      - test_pre_pr_create_check.sh # PR 本文の検証証跡チェックの回帰テスト（#627）
       - detect_pr_diff_type.py
       - analyze_pr_review_comments.py
       - pr_review_trends.py

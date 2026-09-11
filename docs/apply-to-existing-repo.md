@@ -55,7 +55,7 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 | `--desc "..."` | プロジェクト名 | プロジェクト説明（`{{PROJECT_DESCRIPTION}}` 置換） |
 | `--tz Asia/Tokyo` | （空） | タイムゾーン |
 | `--prune` | off | `modules.yaml` で `enabled:false` のモジュール資産を除去 |
-| `--overwrite-project` | off | `CLAUDE.md` / `docs/project-mission.md` も上書き（既定は保護） |
+| `--overwrite-project` | off | `CLAUDE.md` / `docs/project-mission.md` / `REVIEW.md` も上書き（既定は保護） |
 | `--keep-settings` | off | `.claude/settings.json` を上書きしない（既定はバックアップして導入） |
 | `--check-updates` | off | 適用せず、前回適用時点からのアップデート内容だけ表示する |
 | `--dry-run` | off | コピーせず適用対象を表示するだけ（どのファイルがマージ・要確認になるか事前に見える） |
@@ -70,7 +70,7 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 | ルール / スキル / ハーネス / ツール（`docs/rules`・`.claude/{rules,hooks,skills,agents,output-styles,commands}`・`tools`・`scripts`・`modules.yaml`・`.mcp.json`・`.claude-plugin/plugin.json`）と `.claude/settings.json` | **祖先つき 3 方向マージで同期**（下記）。ベース側が更新していないファイルには触らないため、下流の変更が消えない |
 | `.claude/settings.json` | 上と同じ経路。加えて初回のみ `.claude/settings.json.pre-base.bak` に退避する（`--keep-settings` で同期自体を止められるが、ベースのフック更新も届かなくなる） |
 | ベースに存在しないファイル（下流が独自に足したルール・スキル・ツール） | **一切触らない**（同期はベース側にあるファイルだけを対象にするため） |
-| `CLAUDE.md` / `docs/project-mission.md` | **プロジェクト固有のため既定では上書きしない**。既存があれば維持し、ベース版を `*.base` として横に配置（差分を手動で取り込む）。`--overwrite-project` で上書き |
+| `CLAUDE.md` / `docs/project-mission.md` / `REVIEW.md` | **プロジェクト固有のため既定では上書きしない**。既存があれば維持し、ベース版を `*.base` として横に配置（差分を手動で取り込む）。`--overwrite-project` で上書き |
 
 ### 同期の 4 分岐（下流の変更が消えない仕組み）
 

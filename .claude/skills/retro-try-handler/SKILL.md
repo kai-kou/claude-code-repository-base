@@ -190,7 +190,7 @@ git commit -m "[Retro] {カテゴリ}: {Issue タイトルの要約}（Closes #{
 2. **PR 作成**: `mcp__github__create_pull_request`（本文テンプレートは `reference.md` F）
 3. **PR 存在確認（L-050）**: `mcp__github__list_pull_requests(owner, repo, head="{owner}:{current_branch}", state="open")` で 1 件ヒットすることを確認（`head` は `{owner}:{branch}` 形式が必須）
 4. **Slack 通知**: `python3 tools/slack_notify.py pr --pr-url ... --pr-title "[PR作成] ..." --branch ...`
-5. **Layer 1 セルフレビュー（必須）**: 自前 `code-review` スキルを `Skill(code-review)` で必ず実行（`.claude/skills/code-review/` が組み込みを置換・自律起動可・#280）。外部 AI レビュアー（Copilot/Gemini）への依頼はしない。diff ≥300行 / `type:security` / `type:breaking-change` は Layer 2（`discussion_review_trigger.py`）も起動
+5. **Layer 1 セルフレビュー（必須）**: 自前 `code-review` スキルを `Skill(code-review)` で必ず実行（`.claude/skills/code-review/` が組み込みを置換・自律起動可・#280）。外部 AI レビュアー（Copilot/Gemini）への依頼はしない。diff ≥300行 / `type:security` / `type:breaking-change` / `high_risk` 差分（#627）は Layer 2（`discussion_review_trigger.py`）も起動
 6. **レビュー対応・自動マージ**: 指摘対応（修正コミット or スキップ+返信+Resolve）→ Layer 0+1 通過で `mcp__github__merge_pull_request(owner, repo, pullNumber={pr_number}, merge_method="squash")`
 
 Issue クローズは PR 本文の `Closes #N` が `main` マージ時に自動処理する（マージ前は `status:in-progress` のまま維持）。自動クローズが働かない場合のみ `mcp__github__issue_write(method="update", owner, repo, issue_number={N}, state="closed", state_reason="completed")` で手動クローズする。

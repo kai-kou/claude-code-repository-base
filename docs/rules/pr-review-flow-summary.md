@@ -6,8 +6,8 @@
 ## フロー概要
 
 ```
-実装 → セルフレビュー（self-reviewer）→ PR 作成 → Slack 通知
-  → Layer 0 機械ゲート + Layer 1 観点別フレッシュ文脈セルフレビュー（主軸・全 PR 必須・自己実行）
+実装 → セルフレビュー（self-reviewer・Layer 0 機械ゲート + PR 前フレッシュ文脈レビュー #627）→ PR 作成 → Slack 通知
+  → Layer 1 観点別フレッシュ文脈セルフレビュー（主軸・全 PR 必須・自己実行・REVIEW.md で較正）
   → 指摘対応（修正コミット or スキップ + 返信 + Resolve）→ Layer 0+1 通過で自動マージ（squash）
   → **公開反映（publish-sync・マージした同一セッションで完遂）** → Slack 完了通知
 ```
@@ -22,7 +22,7 @@
 1. `mcp__github__create_pull_request`（`head`={作業ブランチ} / `base`=main）。本文に **`Session-Id: $CLAUDE_CODE_SESSION_ID`**・`Sprint Goal:` 1 行・`sp:N` を必ず含める（`--mine` 所有判定と done_sp 計測の前提）
 2. **PR 存在確認（必須・L-050）**: `mcp__github__list_pull_requests` で `head` を指定して実在を確認する（作成の成否をレスポンスだけで判断しない）
 3. Slack 通知: `python3 tools/slack_notify.py pr --pr-url ... --pr-title "[PR作成] ..." --branch ...`
-4. **Layer 1 セルフレビュー**: `Skill(code-review)` を必ず実行 → **指摘は全件 PR の行単位インラインコメントで記録**（指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する・#461）
+4. **Layer 1 セルフレビュー**: `Skill(code-review)` を必ず実行 → **CONFIRMED は PR の行単位インラインコメント、PLAUSIBLE と上限超 NIT は本文に集約**（指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する・#461 → #627）
 5. （任意）`mcp__github__subscribe_pr_activity` + `tools/pr_review_heartbeat.sh` で CI / 人手コメントを監視
 
 > ローカル実行時は `gh pr create --head {branch} --base main -R {owner}/{repo}` でもよい。クラウドでは MCP が一次経路。
@@ -42,7 +42,7 @@
 
 ## 指摘対応ルール
 
-- **記録先は PR の行単位インラインコメント（必須・#461）**: 指摘は確度（CONFIRMED / PLAUSIBLE）を問わず全件インライン化し、対応結論は **同一スレッドへの返信** で残す（新規コメントに分離しない）。指摘ゼロでもレビューを 1 件投稿する。手順・テンプレート・フォールバックの SSOT は `.claude/skills/code-review/SKILL.md` Step 3-A
+- **記録先は PR のレビュー（必須・#461 → #627）**: CONFIRMED は行単位インライン化し（NIT は上限 3 件）、対応結論は **同一スレッドへの返信** で残す（新規コメントに分離しない）。PLAUSIBLE と上限超 NIT は本文列挙で記録し返信不要。指摘ゼロでもレビューを 1 件投稿する。手順・テンプレート・フォールバックの SSOT は `.claude/skills/code-review/SKILL.md` Step 3-A
 - **サイレント原則（L-102）**: AI レビュー指摘対応は **ユーザーに報告しない**。記録は PR スレッド返信・Resolve・Issue コメントのみ（Slack `--outcome` にセルフレビュー実施・指摘件数を書くのも違反）。チャット逐次報告・Slack `@mention`・完了報告アウトカムへの混入は禁止。例外は A-1〜A-6 のみ
 - **`<github-webhook-activity>` は抑制対象ではない（#61・詳細は `pr-review-flow.md`「入力とチャット出力の区別」）**: ハーネスが配信する入力であり L-102 の対象外
 - 対応した場合: 「対応しました。{修正概要}（{commit_sha}）」を返信してから Resolve

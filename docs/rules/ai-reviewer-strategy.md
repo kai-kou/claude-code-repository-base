@@ -20,9 +20,10 @@
 
 | Layer | 役割 | コスト | ステータス |
 |-------|------|--------|-----------|
-| **Layer 0 機械ゲート** | `self_review_check.py`（`scan_dangerous_patterns.py` 含む）/ `check_cjk_markdown.py` / lint / test | ゼロ | ✅ 全 PR 必須 |
-| **Layer 1 CCR セルフレビュー（主軸）** | **自前 `code-review` スキル（`.claude/skills/code-review/`・組み込みを置換・自律起動可）を `Skill(code-review)` で必ず実行**。観点別フレッシュ文脈ファインダー（並列サブエージェント）→ 敵対的検証 → 報告の 3 段で、差分を「第三者の PR」として読み直し自己修正盲点 64.5% を回避。**指摘は必ず PR の行単位インラインコメントで記録し、指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461・振り返り可読性の担保。手順は SKILL.md Step 3-A）。対話セッションの `/code-review` 手打ちも同じ自前スキルに解決される | ゼロ（サブスク枠内） | ✅ **全 PR 必須（依頼ではなく自己実行）** |
-| **Layer 2 敵対的多観点議論** | **`discussion-review` スキル（ネイティブ Agent Teams・既定）** + `discussion_specs/code_review.json`（4 観点・敵対 rebuttal）。`tools/discussion_review_trigger.py` が要否判定と実行プラン出力（`--legacy` で旧 claude -p 経路へフォールバック） | ゼロ | ✅ 条件付き必須（diff ≥300行 または `type:security`/`type:breaking-change` ラベル時）|
+| **Layer 0 機械ゲート** | `self_review_check.py`（`scan_dangerous_patterns.py`・構文検査 `bash -n` / Python・変更ツールの `--self-test` と対応 `tools/test_<name>.sh` の自動実行・#627）/ `check_cjk_markdown.py` / shellcheck・ruff（導入済み環境のみ Warning）/ `pre-pr-create-check.sh` の PR 本文チェック（`Session-Id`・検証証跡・`PR 前レビュー:` 記録・エッジケース表。非ブロッキング） | ゼロ | ✅ 全 PR 必須 |
+| **Layer 0.5 PR 前フレッシュ文脈レビュー（#627）** | `self-reviewer` Step 3.5 が `Skill(code-review)` を `--pre-pr` で実行（投稿なし）。CONFIRMED の CRITICAL / WARNING を修正してから PR を作り、PR 本文に `PR 前レビュー:` 1 行を記録する。対象は `has_code` または `high_risk`（必須）の差分（データのみの差分はスキップ）。同一文脈セルフレビューの盲点（直近 22 PR の指摘 121 件は修正率 79%）を PR 前に潰す | ゼロ（サブスク枠内・非自明 PR で 1 回分増） | ✅ 対象 PR 必須 |
+| **Layer 1 CCR セルフレビュー（主軸）** | **自前 `code-review` スキル（`.claude/skills/code-review/`・組み込みを置換・自律起動可）を `Skill(code-review)` で必ず実行**。観点別フレッシュ文脈ファインダー（並列サブエージェント）→ 敵対的検証 → 報告の 3 段で、差分を「第三者の PR」として読み直し自己修正盲点 64.5% を回避。**CONFIRMED は PR の行単位インラインコメントで記録し（NIT は `REVIEW.md` の上限 3 件）、PLAUSIBLE と上限超の NIT はレビュー本文に集約する。指摘ゼロでも `event="COMMENT"` のレビューを 1 件投稿する**（#461 → #627 で一部改訂・振り返り可読性は本文列挙で担保。手順は SKILL.md Step 3-A）。較正の SSOT はリポジトリ直下の `REVIEW.md`（severity 定義・検証バー・報告しないもの・Nit 上限・再レビュー収束・repo 固有チェック。ファインダーと反証担当に全文注入）。対話セッションの `/code-review` 手打ちも同じ自前スキルに解決される | ゼロ（サブスク枠内） | ✅ **全 PR 必須（依頼ではなく自己実行）** |
+| **Layer 2 敵対的多観点議論** | **`discussion-review` スキル（ネイティブ Agent Teams・既定）** + `discussion_specs/code_review.json`（4 観点・敵対 rebuttal）。`tools/discussion_review_trigger.py` が要否判定と実行プラン出力（`--legacy` で旧 claude -p 経路へフォールバック） | ゼロ | ✅ 条件付き必須（diff ≥300行 / `type:security`・`type:breaking-change` ラベル / `high_risk` 差分（#627）のいずれか）|
 | **Layer 3 外部独立レビュー** | `anthropics/claude-code-security-review` Action / `/ultrareview` 等。**Copilot・Gemini は使わない。** 高リスク差分のみ任意で起動（手動・非ブロッキング） | 従量（高リスク時のみ） | ⚪ 任意（高リスク差分のみ・外部 AI レビュアー依頼は除く） |
 | ~~Copilot~~ | レビュー依頼を廃止（本タスク） | — | ❌ 不使用 |
 | ~~Gemini Code Assist~~ | 2026-07-17 廃止済み | — | ❌ 停止 |
@@ -32,8 +33,8 @@
 
 ### Layer 3 起動判断の機械シグナル（#53）
 
-`tools/detect_pr_diff_type.py`（既存の code/data 判定と同一ツール。Layer 2 の起動判断自体は
-`tools/discussion_review_trigger.py` が独自に行う別ロジックであり、本ツールを呼び出すわけではない）は
+`tools/detect_pr_diff_type.py`（既存の code/data 判定と同一ツール。Layer 2 の起動判断は
+`tools/discussion_review_trigger.py` が行い、#627 以降は同ツールが本ツールの `assess_risk()` を再利用して `high_risk` 条件を判定する）は
 `high_risk` フィールドで Layer 3 起動検討シグナルを返す。
 認証/秘密情報関連パス・公開API/スキーマ/DB関連パス・フック/CI/権限境界（`.claude/hooks/` / `.github/workflows/` / `.claude/settings.json` / `.mcp.json`）の変更・差分行数（500行以上）/ファイル数（20件以上）のいずれかで `true` になる。
 マージをブロックしない任意シグナルであり、`--risk-only` で `true`/`false` のみ取得できる。
@@ -53,6 +54,7 @@ python3 tools/detect_pr_diff_type.py --risk-only   # true/false のみ
 |------|------|
 | 差分行数（追加 + 削除） | ≥ 300 行 |
 | PR ラベル | `type:security` または `type:breaking-change` |
+| `high_risk`（#627） | `detect_pr_diff_type.py` の高リスク判定（hooks / CI / 権限境界 / 認証関連パスの変更、500 行以上 / 20 ファイル以上）が true。クラウドでは `--changed-files` から判定、`--high-risk` で明示指定も可 |
 
 条件を満たさない PR は Layer 0 + Layer 1（自前 `code-review` スキル）のみで対応する（Layer 2 スキップ）。
 Layer 2 失敗時は stderr に警告を出力し、Layer 0+1 で継続する（フォールバック禁止でなくサイレント禁止）。

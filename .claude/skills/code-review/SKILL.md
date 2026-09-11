@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 自前実装のコードレビュースキル（組み込み /code-review の置き換え・FAIR Layer 1 の標準実行手段）。PR 差分または作業ツリー差分を観点別フレッシュ文脈レビュー（並列サブエージェント）→ 敵対的検証 → 指摘報告の 3 段で実行し、PR 文脈では指摘の有無にかかわらず必ず行単位インラインコメントでレビューを残す。「/code-review」「コードレビューして」「差分をレビューして」「PR #N をレビューして」と依頼された時、および PR 作成後の Layer 1 セルフレビュー（pr-review-watcher / self-reviewer から呼び出し）で必ず使用する。組み込み code-review は disable-model-invocation により自律起動不可のため、本スキル（同名 project スコープ・公式仕様で bundled を置換）が対話・自律の両セッションで代替する。
+description: 自前実装のコードレビュースキル（組み込み /code-review の置き換え・FAIR Layer 1 の標準実行手段）。PR 差分または作業ツリー差分を観点別フレッシュ文脈レビュー（並列サブエージェント）→ 敵対的検証 → 指摘報告の 3 段で実行し、PR 文脈では指摘の有無にかかわらず必ずレビューを残す（CONFIRMED は行単位インラインコメント、PLAUSIBLE と上限超の NIT はレビュー本文に集約・#627）。PR 作成前モード（self-reviewer Step 3.5 から `--pre-pr` で呼び出し）では投稿せず CONFIRMED を修正する。較正の SSOT はリポジトリ直下の REVIEW.md。「/code-review」「コードレビューして」「差分をレビューして」「PR #N をレビューして」と依頼された時、および PR 作成後の Layer 1 セルフレビュー（pr-review-watcher / self-reviewer から呼び出し）で必ず使用する。組み込み code-review は disable-model-invocation により自律起動不可のため、本スキル（同名 project スコープ・公式仕様で bundled を置換）が対話・自律の両セッションで代替する。
 effort: high
 model: inherit
 ---
@@ -18,21 +18,38 @@ bundled スキルを置換する公式仕様**（[skills ドキュメント](htt
 ## トリガー条件
 
 - `/code-review`（引数: PR 番号 or 省略で作業ツリー差分）・「コードレビューして」等の依頼時
+- **PR 作成前のフレッシュ文脈レビュー**（`self-reviewer` Step 3.5 から `--pre-pr` で呼び出し・投稿なし・#627）
 - **PR 作成後の Layer 1 セルフレビュー**（全 PR 必須・`pr-review-watcher` / `self-reviewer` Step 4 から呼び出し）
 - 修正コミット後の再レビュー時（`pr-review-flow.md` 修正サイクル）
 
 ## 実行フロー（find → verify → report）
 
-### Step 0: レビュー対象差分の確定
+### Step 0: モード・レビュー対象差分・較正の確定
+
+| モード | 起動 | 対象差分 | 出力先 |
+|------|------|---------|--------|
+| **pre-pr**（PR 作成前・#627） | `self-reviewer` Step 3.5 / `/code-review --pre-pr`（実施要否＝`has_code` / `high_risk` / `data_only` の判定は Step 3.5 側が担い、本スキルは判定しない） | `git diff origin/main...HEAD` + 未コミット | 投稿しない。CONFIRMED を修正して 1 行サマリーを呼び出し元へ返す（Step 3） |
+| **pr**（Layer 1） | `/code-review N` / `pr-review-watcher` / `self-reviewer` Step 4 | PR 差分 | Step 3-A（インライン + 本文） |
+| **worktree** | `/code-review`（引数なし・PR なし） | 作業ツリー差分 | チャット / `ReportFindings` |
 
 ```bash
-# PR 番号指定あり（クラウド一次経路 = MCP・L-114）
+# pr: PR 番号指定あり（クラウド一次経路 = MCP・L-114）
 mcp__github__pull_request_read(method="get_diff", owner="__OWNER__", repo="__REPO__", pullNumber=N)
-# 指定なし = 現在ブランチの差分（未コミット含む）
+# pre-pr / worktree: 現在ブランチの差分（未コミット含む）
 git fetch origin +main:refs/remotes/origin/main && git diff origin/main...HEAD && git diff HEAD
 ```
 
 差分ゼロなら「レビュー対象なし」を報告して終了する（空レビューを捏造しない・L-113）。
+
+**較正ファイルの読み込み（全モード）**: リポジトリ直下に `REVIEW.md` があれば全文を読み、Step 1 のファインダーと
+Step 2 の反証担当のプロンプト先頭に **そのまま** 入れる（severity 定義・検証バー・報告しないもの・Nit 上限・
+再レビュー収束・repo 固有チェックの SSOT。ローカル `/code-review` は REVIEW.md を読まない公式仕様のため、スキル側で
+明示注入する）。無ければ Step 1 の観点表と Step 2 の反証だけで動く。
+**読む版は base に固定する**（`git show origin/main:REVIEW.md`・pre-pr モードも同じ）。レビュー対象の差分自身が REVIEW.md を書き換えて較正を
+緩める経路を塞ぐため、作業ツリー / PR ブランチ版は使わない。**base に無い場合（REVIEW.md を新設する PR 自身を含む）も
+作業ツリー版を使わず**、本スキルの既定較正（Step 1 の観点表・Step 2 の反証）だけで動き、サマリーに「REVIEW.md 未適用
+（base に無し）」と 1 行残す（導入 PR が自分の較正を持ち込める例外を作らない）。差分に REVIEW.md の変更が含まれる場合は、
+その変更自体をドキュメント整合の観点で通常どおりレビューし、サマリーに「REVIEW.md 変更あり（較正は base 版）」と 1 行残す。
 
 **PR 番号指定ありのときは、あわせて PR 本文も取得する**（Step 1 の Spec 忠実性ファインダーが
 対象 Issue を解決するために要る。差分だけでは判定材料が揃わない）:
@@ -40,6 +57,16 @@ git fetch origin +main:refs/remotes/origin/main && git diff origin/main...HEAD &
 ```bash
 mcp__github__pull_request_read(method="get", owner="__OWNER__", repo="__REPO__", pullNumber=N)
 ```
+
+PR 本文から次の 2 つも取り出す:
+
+- **「設計意図・既知の警告」セクション** → `{DESIGN_INTENT}` として全ファインダーに渡す（理由付きで明記された
+  意図的設計を「バグ」と指摘させない。理由が誤っている場合だけ指摘対象）
+- **「PR 前レビュー:」の行**（`self-reviewer` Step 3.5 の記録）→ Step 3-A のサマリーに転記する
+
+**ラウンド判定（pr モード）**: `get_reviews` で自分（`get_me` の login）の Layer 1 レビューが既に投稿されていれば
+**ラウンド 2 以降**（修正コミット後の再レビュー）。REVIEW.md の収束ルール（新規の CRITICAL / WARNING と前回指摘の
+修正漏れだけを報告し、新規 NIT は報告しない）をファインダーに指示する。
 
 ### Step 1: 観点別フレッシュ文脈ファインダー（並列サブエージェント）
 
@@ -60,18 +87,26 @@ mcp__github__pull_request_read(method="get", owner="__OWNER__", repo="__REPO__",
 各ファインダーへの指示テンプレート（`agent-team-summary.md` の出力ルールを先頭に付ける）:
 
 ```
+{REVIEW.md の全文（あれば）}
+---
+{DESIGN_INTENT（pr モードで PR 本文にあれば）: 「設計意図・既知の警告」に理由付きで明記された設計は指摘しない。理由が誤っている場合だけ、その誤りを指摘する}
+---
+{ラウンド 2 以降なら: 修正コミット後の再レビューである。新規の CRITICAL / WARNING と前回指摘の修正漏れだけを報告し、新規 NIT は報告しない}
 この差分を第三者の PR として {観点} の観点でレビューせよ。
 指摘は次の 5 項目を必ず埋めた形式で返す（1 指摘 1 ブロック）:
   - ファイル:行番号（差分に現れる行。範囲指摘なら開始-終了行）
-  - severity: CRITICAL | WARNING | NIT
+  - severity: CRITICAL | WARNING | NIT（REVIEW.md の定義に従う）
   - 欠陥の1文
-  - 失敗シナリオ（入力・状態 → 誤動作）
-  - 推奨修正（具体的な修正案。コード片可）
-失敗シナリオを書けない指摘・スタイル好みは報告しない。指摘ゼロなら「なし」と返す。
+  - 失敗シナリオ（入力・状態 → 実行パス → 誤動作）
+  - 根拠（差分または既存コードの file:line。命名からの推測は不可。実行して確認できるものは実行結果）
+修正案は書かない（検出と修正提案を分離する。修正案は Step 2 で CONFIRMED にだけ付ける）。
+失敗シナリオか根拠を書けない候補・スタイル好みは報告しない。指摘ゼロなら「なし」と返す。
 ```
 
-> `severity` と `推奨修正` は Step 3 のインラインコメント本文テンプレートの必須項目である。
+> `severity`・`失敗シナリオ`・`根拠` は Step 3 のインラインコメント本文テンプレートの必須項目である。
 > ここで出力させないと Step 3 でテンプレートを埋める材料が無くなるため、指示から省略しない。
+> `推奨修正` は Step 2 の反証担当が CONFIRMED に対して書く（ファインダーに修正案まで求めると、正しいコードにも
+> 欠陥を仮定する過剰修正バイアスが強まる・arXiv:2603.00539）。
 
 **Spec 忠実性ファインダーだけは追加の入力が要る**。他の 5 観点は差分だけで判定できるが、この観点は
 「差分が何を実装すべきだったか」を外から与えないと成立しない。起動前に対象 Issue / spec を確定し、
@@ -109,22 +144,25 @@ mcp__github__pull_request_read(method="get", owner="__OWNER__", repo="__REPO__",
 
 ### Step 2: 敵対的検証（false positive の排除）
 
-ファインダーの指摘を **そのまま報告しない**。指摘ごとに反証担当サブエージェントへ
-「この指摘を反証せよ（既存のガードで防がれていないか・実際に到達可能か）」を渡し、
-反証に耐えた指摘のみ **CONFIRMED** として残す（反証しきれないが疑いが残るものは
-**PLAUSIBLE** と明記）。指摘が少数（3 件以下）ならメインセッションが自分で反証確認してもよい。
+ファインダーの指摘を **そのまま報告しない**。指摘ごとに反証担当サブエージェントへ REVIEW.md の検証バーと
+「この指摘を反証せよ（既存のガードで防がれていないか・実際に到達可能か・根拠の file:line は実在するか）」を渡し、
+判定を 3 値で返させる: 反証に耐えた **CONFIRMED** / 反証しきれないが疑いが残る **PLAUSIBLE** / 反証できた **REFUTED**。
+**推奨修正（具体的な修正案・コード片可）は CONFIRMED にだけ、この段で書く**。
+指摘が少数（3 件以下）ならメインセッションが自分で反証確認してもよい。
+同一 `path:line` への複数ファインダーの指摘はここで統合する（バッチ内 dedup）。
 
 ### Step 3: 報告・対応（PR 文脈では **インラインコメント必須**）
 
 | 文脈 | 報告先 |
 |------|--------|
+| **pre-pr**（`self-reviewer` Step 3.5 からの呼び出し・#627） | **投稿しない**。CONFIRMED の CRITICAL / WARNING を作業ツリーで修正（NIT は軽微なら修正、見送るなら理由を PR 本文「設計意図・既知の警告」へ。Layer 1 は同セクションを `{DESIGN_INTENT}` として受け取るため、理由付きの見送りは再指摘されない）→ 機械チェック（`python3 tools/self_review_check.py`）→ コミット。呼び出し元に 1 行 `PR 前レビュー: 検出 N 件（🔴a 🟡b ⚪c・CONFIRMED d / PLAUSIBLE e）→ 修正 f 件・見送り g 件` を返す。チャットには報告しない（L-102） |
 | **自律 PR フロー**（Layer 1・`pr-review-watcher` / `self-reviewer` からの呼び出し） | **必ず Step 3-A の手順で GitHub のレビューを 1 件投稿する**（指摘ゼロでも投稿する）。チャットには報告しない（L-102 サイレント） |
 | **対話セッションでユーザーが PR を指定して依頼**（`/code-review {PR番号}`・「PR #N をレビューして」） | **Step 3-A で投稿した上で**、チャットにアウトカム 1 行（投稿件数・重大度内訳・PR リンク）を返す。ユーザー自身が依頼したレビューの結果報告は L-102 の対象外 |
 | PR が存在しない作業ツリー差分レビュー | チャットに重大度順で報告。`ReportFindings` ツールが利用可能な環境ではそちらで報告する（投稿先が無いためインライン投稿は行わない） |
 
 - 修正適用（`--fix` 相当）を求められたら、CONFIRMED 指摘の修正を作業ツリーへ適用（自律フローでは修正コミット）する
 - 修正サイクルが 2 回を超えたらサーキットブレーカー（A-4）で STOP しユーザー報告
-- diff ≥300 行 / `type:security` / `type:breaking-change` は Layer 2（`discussion_review_trigger.py`）も起動する（`ai-reviewer-strategy.md`）
+- diff ≥300 行 / `type:security` / `type:breaking-change` / `high_risk` 差分（#627）は Layer 2（`discussion_review_trigger.py`）も起動する（`ai-reviewer-strategy.md`）
 
 #### Step 3-A: インラインレビュー投稿手順（PR 文脈で必ず実行・#461）
 
@@ -160,7 +198,11 @@ mcp__github__pull_request_review_write(method="create", owner, repo, pullNumber=
 
 `event` を渡すと即 submit されコメントを積めない。`commitID` は force push 後の取り違えを防ぐため必ず指定する。
 
-**3. 指摘ごとにインラインコメントを積む（CONFIRMED / PLAUSIBLE とも全件）**
+**3. 指摘ごとにインラインコメントを積む（CONFIRMED のみ・#627 で #461 を一部改訂）**
+
+- **インラインにするのは CONFIRMED だけ**。CRITICAL / WARNING は全件、NIT は REVIEW.md の上限（既定 3 件）まで。
+  **PLAUSIBLE（全 severity）と上限超の NIT は投稿せず、4 のサマリー本文に `path:line` + 1 行要旨で列挙する**
+  （記録は PR 内に残す・返信 / Resolve が要るスレッドを増やさない）。REFUTED は件数のみ
 
 ```
 # ケース A: 指摘行が RIGHT 側ハンク内（通常）
@@ -175,7 +217,7 @@ mcp__github__add_comment_to_pending_review(owner, repo, pullNumber=N, path="{fil
 
 ```markdown
 **🔴 CRITICAL** ・ **CONFIRMED** ・ 観点: 正確性
-<!-- severity は 🔴 CRITICAL / 🟡 WARNING / ⚪ NIT、確度は CONFIRMED / PLAUSIBLE -->
+<!-- severity は 🔴 CRITICAL / 🟡 WARNING / ⚪ NIT。インライン投稿は CONFIRMED のみ（#627） -->
 
 {欠陥を1文で}
 
@@ -202,20 +244,23 @@ mcp__github__pull_request_review_write(method="submit_pending", owner, repo, pul
 - サマリー本文は **実行証跡 + 目次** に限定し、技術詳細はインライン側に置く（二重記載は修正時に食い違う）:
 
 ```markdown
-## Layer 1 セルフレビュー結果（{YYYY-MM-DD HH:MM JST}）
+## Layer 1 セルフレビュー結果（{YYYY-MM-DD HH:MM JST}・ラウンド {n}）
 
-観点: 正確性 / セキュリティ / 簡素化・再利用 / テスト・検証 / ドキュメント整合 / Spec 忠実性（{実施数} 系統実施）
+CONFIRMED 🔴{n} 🟡{n} ⚪{n}（インライン {m} 件）/ PLAUSIBLE {n} / 反証で除外 {n} / 観点 {実施数} 系統実施
+{PR 本文の「PR 前レビュー:」行を転記する。無ければ「PR 前レビュー: 記録なし」}
 {未実施があれば「未実施: Spec 忠実性（理由: 対象 Issue を解決できず）」の 1 行を必ず置く}
 
-- CONFIRMED: {件数}件（🔴{n} 🟡{n} ⚪{n}）→ 各インラインコメント参照
-- PLAUSIBLE: {件数}件
+### インライン化しなかった指摘（記録用・返信不要）
+- ⚪ NIT（上限超）: `path:line` — 要旨
+- PLAUSIBLE 🟡: `path:line` — 要旨（反証で残った疑い: 1 句）
 ```
 
 **実施数は固定値を書かない**。Step 1 で観点を追減した場合・Spec 忠実性を対象 Issue 未解決でスキップした
 場合は、その実数と未実施の理由を反映させる（実施していない観点を実施したと書くのは L-113 の捏造にあたる）。
 
-**指摘ゼロ件のとき** は 3 をスキップし、`create` → `submit_pending(event="COMMENT")` だけを実行して
-`観点 {実施数} 系統実施 → 敵対的検証 → 指摘 0 件` と本文に明記する。**追加の issue コメントは打たない**（二重記録の回避）。
+**インライン化する指摘がゼロ件のとき** は 3 をスキップし、`create` → `submit_pending(event="COMMENT")` だけを実行して
+`CONFIRMED 0 件（観点 {実施数} 系統実施 → 敵対的検証）` で本文を始める（PLAUSIBLE / 上限超 NIT があればその列挙は含める）。
+**追加の issue コメントは打たない**（二重記録の回避）。
 submit 済みレビューの body は編集できないため、再レビューは新しいレビューとして投稿する。
 
 **5. スレッド ID を取得して既存フローへ合流**
@@ -232,7 +277,8 @@ mcp__github__pull_request_read(method="get_review_comments", owner, repo, pullNu
 ⏭️ スキップします。理由: {理由}
 ```
 
-PLAUSIBLE は確度が低いので `⏭️ スキップします。理由: 確度低（PLAUSIBLE）` で閉じてよい。**未返信のまま放置しない**。
+インラインになるのは CONFIRMED だけなので、返信は `✅ 対応しました` か（NIT を見送るときのみ）`⏭️ スキップします。理由: …`。
+**未返信のまま放置しない**。サマリーに列挙した PLAUSIBLE / 上限超 NIT には返信不要（対応する場合は修正コミットに含めてよい）。
 
 #### Step 3-B: 投稿に失敗したときのフォールバック（サイレント放棄は禁止）
 
@@ -252,6 +298,9 @@ add_comment_to_pending_review が失敗
 ## 注意（再発防止）
 
 - 本スキルの frontmatter に `disable-model-invocation` を **追加しない**（追加すると自律起動が再び不能になり本スキルの存在意義が消える）
+- `REVIEW.md` を読んだら **全文をプロンプトに入れる**（`@` import は展開されない前提で書かれている）。無い場合も本スキルの既定較正（Step 1 の観点表・Step 2 の反証）で動く。REVIEW.md を要約して渡さない
+- **pre-pr モードでは投稿も チャット報告もしない**（L-102）。PR 前レビューの記録は PR 本文「セルフレビュー結果」の `PR 前レビュー:` 1 行で残す（`pre-pr-create-check.sh` が欠落を Warning する）
+- インライン投稿の対象を広げない（CONFIRMED のみ・NIT は REVIEW.md の上限まで）。PLAUSIBLE をスレッド化すると返信 / Resolve の往復が増え、#627 の較正が無効になる
 - PR 文脈で **インライン投稿を省略しない**（#461）。「指摘が軽微だから」「ゼロ件だから」「チャットで報告したから」は
   いずれもスキップ理由にならない。投稿しない唯一のケースは「PR が存在しない作業ツリー差分レビュー」だけ
 - `event="APPROVE"` / `event="REQUEST_CHANGES"` を指定しない（前者は自己 PR で必ず失敗、後者は自分で解除できない）

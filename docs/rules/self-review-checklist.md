@@ -8,7 +8,8 @@
 > 出自プロジェクト（動画制作）の実例**。自プロジェクトの成果物種別のチェック項目に読み替える
 > （汎用的に効くのはセクション構成と「頻出指摘を機械化して 1 枚ものに集約する」運用）。
 >
-> - **機械チェック**: `python3 tools/self_review_check.py` が一括実行する（フック `pre-pr-create-check.sh` からも自動実行）
+> - **機械チェック**: `python3 tools/self_review_check.py` が一括実行する（フック `pre-pr-create-check.sh` からも自動実行）。構文検査（`bash -n` / Python）・変更ツールの `--self-test` と対応 `tools/test_<name>.sh` の自動実行・CJK 半角スペース・危険パターンを含む（#627 で構文検査と対応テストを追加）
+> - **PR 前フレッシュ文脈レビュー**: `self-reviewer` Step 3.5（`Skill(code-review)` の `--pre-pr` モード）。較正は `REVIEW.md`（#627）
 > - **目視チェック**: 機械化できない項目。変更カテゴリに該当する行だけ確認すればよい
 > - 詳細な検出手順・修正候補は `.claude/skills/self-reviewer/SKILL.md`、個別パターンの経緯は プロジェクト定義の自己レビュー教訓ファイル（出自プロジェクトでは `docs/rules/self-review-learnings.md`（P-XX）等）を参照 <!-- refcheck:ignore -->
 > - 分析レポート（データの根拠）: `docs/analysis/pr-review-comments-analysis-2026-06.md` <!-- refcheck:ignore -->
@@ -45,6 +46,12 @@
 | ☐ | タスク外ファイルが diff に混入していないか（`git diff origin/main...HEAD --name-only`） | 目視 | `core-principles.md` CP-1（スコープ外の改善は別 Issue を立ててから着手する） |
 | ☐ | リポジトリ名・パス・コマンドの typo（__REPO__ の末尾 i 重複等） | 機械 | 実指摘あり（誤操作リスク） |
 | ☐ | 対象 Issue の Done Criteria（Issue 本文または最初のコミットメッセージのいずれかに記載）を diff が満たしているか（どちらにも未記載なら理由を1行記録してスキップ） | 目視 | self-reviewer SKILL.md Step 1 追加（verification loops 記事の spec validation 縮小採用・#297・#302） |
+| ☐ | **PR 前フレッシュ文脈レビューを通したか**（`has_code` または `high_risk` の差分。データのみはスキップ。`self-reviewer` Step 3.5 → `Skill(code-review)` を `--pre-pr` で実行 → CONFIRMED を修正 → PR 本文に `PR 前レビュー:` 1 行） | 機械（フックが記録欠落を Warning） | #627（直近 22 PR の指摘 121 件は修正率 79%・同一文脈チェックの死角。対照例 #586 は PR 後 0 件） |
+| ☐ | 新規・変更したチェッカー / ガード / フックに「ロジックを外すと落ちる」否定テストがあるか（テストが緑でも、そのテストが何を検出できないかを 1 回問う） | 目視 + 機械（対応 `tools/test_<name>.sh` を自動実行） | #627（テスト・検証欠落 16%。vacuous test の実例 #550） |
+| ☐ | fail-open になっていないか（読めない・解析できない入力で黙ってスキップしていないか）。既存の fail-closed 方針と一貫しているか | 目視 | #627（実例 #577 / #579） |
+| ☐ | ドキュメントに書いた件数・数値・手順が差分後の実測値と一致しているか（テストや項目を追加したら数字も更新する） | 目視 | #627（ドキュメント整合 17%。実例 #619 の回帰テスト件数） |
+| ☐ | 「議論で合意した」「完了条件は別 Issue へ送る」と書くとき、その根拠（Issue / 議論記録の該当箇所）を実際に開いて確認したか | 目視 | #627（Spec 忠実性 9%。実例 #619） |
+| ☐ | 許可リスト（`permissions.allow` 等）への追加は、そのコマンドで何が書き換え・読み出し可能になるかまで確認したか | 目視 | #627（セキュリティ 21%。実例 #547） |
 
 ## 1. 台本・コンテンツ（`content/scripts/` `content/meta/`）
 

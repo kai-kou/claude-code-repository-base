@@ -7,7 +7,13 @@ Error 検出時（exit 1）に PR 作成をブロックする「Lv3 ハードコ
 汎用ベースでは誤ブロックを避けるため保守的に、明確な事故のみを Error にする:
   - Error: マージコンフリクト痕跡（<<<<<<< / ======= / >>>>>>>）
   - Error: 巨大ファイルの新規追加（既定 5MB 超・SELF_REVIEW_MAX_MB で調整）
+  - Error: bash 構文エラー（`bash -n`。.sh / .bash 拡張子と bash / sh shebang が対象・Issue #627）
+  - Error: Python 構文エラー（`compile()`。変更された .py が対象・Issue #627）
+  - Error: 対応テスト失敗（変更ファイルに対応する tools/test_<name>.sh を自動実行・Issue #627。
+    SELF_REVIEW_SELFTEST=warn で Warning に降格）
   - Warning: デバッグ痕跡（TODO/FIXME/console.log/print デバッグ等）※ブロックしない
+  - Warning: shellcheck 指摘（shellcheck 導入済み環境のみ・-S warning・Issue #627）
+  - Warning: ruff E9/F63/F7/F82（ruff 導入済み環境のみ・変更された .py が対象・Issue #627）
 
 プロジェクト固有のチェックは docs/rules/self-review-checklist.md に追記し、
 本スクリプトに検査関数を足して拡張する。
@@ -236,12 +242,209 @@ def hot_budget_reminder(files: list[str]) -> str | None:
     return f"Hot 層予算チェック NG: {detail} → docs/rules/token-optimization-rules.md の増減ログを更新してください"
 
 
-# pre-pr-create-check.sh は self_review_check.py プロセス全体を外側 timeout 60 秒で包む。
+# Issue #627 対策 C（Layer 0 強化）: 決定論的に検出できる事故は LLM レビュー前に落とす。
+# bash / Python の構文エラーとテスト未実行は、レビュアーの目視を待たず機械的に確定できる。
+
+def _is_bash_shebang(first_line: str) -> bool:
+    """shebang 行が bash / sh インタプリタを指しているかを判定する。
+
+    `#!/bin/bash` `#!/bin/sh` のような直接指定と、`#!/usr/bin/env bash` のような
+    env 経由の指定の両方に対応する。末尾のフラグ（`#!/bin/bash -e`）は無視する。
+    """
+    line = first_line.strip()
+    if not line.startswith("#!"):
+        return False
+    parts = line[2:].split()
+    if not parts:
+        return False
+    interpreter = parts[-1] if Path(parts[0]).name == "env" else parts[0]
+    return Path(interpreter).name in ("bash", "sh")
+
+
+def _bash_syntax_targets(files: list[str]) -> list[str]:
+    """bash 構文検査（bash -n）と shellcheck の対象ファイル一覧を返す。
+
+    対象: .sh / .bash 拡張子のファイル、または shebang 行が bash / sh を指すファイル。
+    """
+    targets: list[str] = []
+    for f in files:
+        if Path(f).suffix in (".sh", ".bash"):
+            targets.append(f)
+            continue
+        try:
+            with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                first_line = fh.readline()
+        except Exception:
+            continue
+        if _is_bash_shebang(first_line):
+            targets.append(f)
+    return targets
+
+
+def bash_syntax_errors(files: list[str]) -> list[str]:
+    """変更された bash/sh スクリプトを `bash -n` で構文検査する（Error・Issue #627）。"""
+    errs: list[str] = []
+    for f in _bash_syntax_targets(files):
+        try:
+            proc = sh(["bash", "-n", f])
+        except subprocess.TimeoutExpired:
+            errs.append(f"構文エラー (bash -n) タイムアウト: {f}")
+            continue
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"構文エラー (bash -n) 実行エラー: {f}: {e}")
+            continue
+        if proc.returncode != 0:
+            lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+            first = lines[0] if lines else "(出力なし)"
+            errs.append(f"構文エラー (bash -n): {f}: {first}")
+    return errs
+
+
+def python_syntax_errors(files: list[str]) -> list[str]:
+    """変更された .py を `compile()` で構文検査する（Error・Issue #627）。
+
+    py_compile は __pycache__ に .pyc を書き込むため使わず、compile() のみで
+    検証する（バイトコードは破棄し SyntaxError の有無だけを見る）。
+    """
+    errs: list[str] = []
+    for f in files:
+        if not f.endswith(".py"):
+            continue
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        try:
+            compile(text, f, "exec")
+        except SyntaxError as e:
+            lineno = e.lineno if e.lineno is not None else 0
+            errs.append(f"構文エラー (python): {f}:{lineno}: {e.msg or e}")
+        except Exception as e:  # noqa: BLE001 - NUL 文字等 compile() が投げうる他の異常も報告する
+            errs.append(f"構文エラー (python): {f}: {e}")
+    return errs
+
+
+def shellcheck_warnings(files: list[str]) -> list[str]:
+    """shellcheck 導入済みの環境でのみ、対象シェルファイルを検査する（Warning・Issue #627）。
+
+    未導入環境（既定）では何もしない。あくまで補助チェックのためブロックはしない。
+    """
+    if shutil.which("shellcheck") is None:
+        return []
+    targets = _bash_syntax_targets(files)
+    if not targets:
+        return []
+    try:
+        proc = sh(["shellcheck", "-S", "warning", "-f", "gcc", *targets], timeout=15)
+    except subprocess.TimeoutExpired:
+        return [f"shellcheck タイムアウト（15秒超）: {', '.join(targets[:5])}"]
+    except Exception as e:  # noqa: BLE001
+        return [f"shellcheck 実行エラー: {e}"]
+    return [f"shellcheck: {line.strip()}" for line in (proc.stdout or "").splitlines() if line.strip()]
+
+
+def ruff_syntax_warnings(files: list[str]) -> list[str]:
+    """ruff 導入済みの環境でのみ、変更 .py の構文/未定義名クラスを検査する（Warning・Issue #627）。
+
+    E9（構文エラー）・F63（比較/型の誤用）・F7（構文関連）・F82（未定義名）に限定する。
+    既存の SELF_REVIEW_RUFF=1 opt-in（S=bandit ルール）とは独立に、既定 ON で動く。
+    """
+    if shutil.which("ruff") is None:
+        return []
+    py_files = [f for f in files if f.endswith(".py")]
+    if not py_files:
+        return []
+    try:
+        proc = sh(
+            ["ruff", "check", "--select", "E9,F63,F7,F82", "--output-format", "concise", *py_files],
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return [f"ruff タイムアウト（15秒超）: {', '.join(py_files[:5])}"]
+    except Exception as e:  # noqa: BLE001
+        return [f"ruff 実行エラー: {e}"]
+    warns: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        s = line.strip()
+        if s and ".py:" in s and not s.lower().startswith(("found", "warning:", "error:")):
+            warns.append(f"ruff: {s}")
+    return warns
+
+
+def _resolves_under_dir(path: Path, base_dir: Path) -> bool:
+    """path の実体解決先が base_dir 配下かどうかを判定する（シンボリックリンク越境防止）。"""
+    try:
+        resolved = path.resolve()
+    except Exception:
+        return False
+    try:
+        return resolved.is_relative_to(base_dir)
+    except AttributeError:  # pragma: no cover - Python 3.8 互換フォールバック
+        try:
+            resolved.relative_to(base_dir)
+            return True
+        except ValueError:
+            return False
+
+
+def _companion_test_script_targets(files: list[str]) -> list[str]:
+    """変更ファイルに対応する tools/test_<name>.sh を収集する（Issue #627 対策 C）。
+
+    対象スコープ: .claude/hooks/ 直下の .sh・.claude/hooks/lib/ 配下・tools/ 直下の
+    .py / .sh。拡張子を除いた stem に対して tools/test_<stem>.sh が存在すれば対象に
+    加える。テストスクリプト自身（tools/test_*.sh）が変更された場合は、stem 照合
+    （tools/test_test_<stem>.sh は通常存在しない）ではなくそれ自身を直接対象に加える。
+    同じテストが複数の変更ファイルから指されても重複排除して 1 回だけ実行する。
+    解決後の実パスが tools/ 実体配下にないもの（シンボリックリンク越境）は除外する
+    （self_test_errors() の _is_allowed と同じ方針）。
+    """
+    repo_root = Path(".").resolve()
+    tools_dir = repo_root / "tools"
+    hooks_dir = Path(".claude/hooks")
+    tools_rel = Path("tools")
+
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _add(candidate: str) -> None:
+        if candidate in seen:
+            return
+        cp = Path(candidate)
+        if not cp.is_file() or not _resolves_under_dir(cp, tools_dir):
+            return
+        seen.add(candidate)
+        out.append(candidate)
+
+    for f in files:
+        p = Path(f)
+        in_scope = (
+            (p.parent == hooks_dir and p.suffix == ".sh")
+            or f.startswith(".claude/hooks/lib/")
+            or (p.parent == tools_rel and p.suffix in (".py", ".sh"))
+        )
+        if not in_scope:
+            continue
+        if p.parent == tools_rel and p.suffix == ".sh" and p.name.startswith("test_"):
+            _add(f)
+            continue
+        # フック名はハイフン区切り（pre-pr-create-check.sh）、テスト名はアンダースコア区切り
+        # （test_pre_pr_create_check.sh）が慣例のため、両方の綴りで照合する
+        _add(f"tools/test_{p.stem}.sh")
+        _add(f"tools/test_{p.stem.replace('-', '_')}.sh")
+    return out
+
+
+# pre-pr-create-check.sh は self_review_check.py プロセス全体を外側 timeout 90 秒で包む。
 # ツール単体に近い秒数を許すと合計が外側予算を超え、timeout コマンドが exit=124 で
 # プロセスごと強制終了する（フックは check_exit==1 のときしか hook_block しないため、
 # 124 は「チェッカー自体の異常」扱いで PR 作成が無警告に通ってしまう）。
+# 予算の起点はプロセス起動時（GATE_STARTED）。--self-test / 対応テストより前に走る lint 段
+# （shellcheck / ruff・各 15 秒上限）の経過も同じ時計で数えるため、self-test 段は起動から
+# 約 60 秒以内に終わり、外側の 90 秒を超えない（起点を self_test_errors() 内に置くと lint 段の
+# 経過が予算に乗らず合計が 90 秒を超えうる・#627 Layer 2 指摘）。
 SELF_TEST_PER_TOOL_TIMEOUT = 15
-SELF_TEST_BUDGET_SECONDS = 40
+SELF_TEST_BUDGET_SECONDS = 60
+GATE_STARTED = time.monotonic()
 
 # 対象判定は基本 "--self-test" 文字列の有無で機械的に拾うが（新設ツールが自動で対象へ加わる）、
 # チェッカー自身は .py に変更が無くても、監視対象の非 .py ファイル（.sh 等）が変更されたら
@@ -253,6 +456,34 @@ COMPANION_SELF_TESTS: dict[str, tuple[str, ...]] = {
     "scripts/publish-snapshot.sh": ("tools/check_distribution_boundary.py",),
     "scripts/bootstrap.sh": ("tools/check_distribution_boundary.py",),
 }
+
+
+def _run_within_budget(cmd: list[str], label: str, f: str, started: float,
+                       errs: list[str], hint: str) -> None:
+    """PR 前ゲートの実行時間予算内でコマンドを 1 つ実行し、未実行 / タイムアウト / 実行エラー / 失敗を
+    errs に整形して積む（--self-test と対応テストの共用ヘルパー。予算計算と文言を 1 箇所に集約する）。
+    """
+    elapsed = time.monotonic() - started
+    if elapsed > SELF_TEST_BUDGET_SECONDS:
+        errs.append(
+            f"{label}未実行: {f}（PR 前ゲートの実行時間予算 {SELF_TEST_BUDGET_SECONDS}秒を"
+            f"超過。ローカルで `{hint}` を確認してから再度 PR 作成してください）"
+        )
+        return
+    remaining = max(1, int(SELF_TEST_BUDGET_SECONDS - elapsed))
+    per_call_timeout = min(SELF_TEST_PER_TOOL_TIMEOUT, remaining)
+    try:
+        proc = sh(cmd, timeout=per_call_timeout)
+    except subprocess.TimeoutExpired:
+        errs.append(f"{label}タイムアウト: {f}（{per_call_timeout}秒超）")
+        return
+    except Exception as e:  # noqa: BLE001 - サブプロセス起動失敗等もフェイルオープンさせない
+        errs.append(f"{label}実行エラー: {f}: {e}")
+        return
+    if proc.returncode != 0:
+        output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        detail = output[-200:] if output else "(出力なし)"
+        errs.append(f"{label}失敗: {f}（exit={proc.returncode}）: {detail}")
 
 
 def self_test_errors(files: list[str]) -> list[str]:
@@ -270,6 +501,11 @@ def self_test_errors(files: list[str]) -> list[str]:
 
     対象はさらに、解決後の実パスが tools/ または scripts/ の実体配下にあるものに限定する
     （シンボリックリンク経由でリポジトリ外の任意ファイルを実行させない）。
+
+    さらに、変更ファイルに対応する tools/test_<name>.sh（.claude/hooks/*.sh・
+    .claude/hooks/lib/*・tools/*.py・tools/*.sh が対象）が存在すれば実行する
+    （Issue #627 対策 C）。対象判定は _companion_test_script_targets() に分離し、
+    上の --self-test ループと同じ started 基準の実行時間予算を共有する。
     """
     errs: list[str] = []
     repo_root = Path(".").resolve()
@@ -277,17 +513,8 @@ def self_test_errors(files: list[str]) -> list[str]:
     allowed_dirs = (repo_root / "tools", repo_root / "scripts")
 
     def _is_allowed(path: Path) -> bool:
-        for d in allowed_dirs:
-            try:
-                if path.is_relative_to(d):
-                    return True
-            except AttributeError:  # pragma: no cover - Python 3.8 互換フォールバック
-                try:
-                    path.relative_to(d)
-                    return True
-                except ValueError:
-                    pass
-        return False
+        # 実体解決 + 配下判定は _resolves_under_dir() に一本化する（二重実装の解消・#627）
+        return any(_resolves_under_dir(path, d) for d in allowed_dirs)
 
     targets = [
         f for f in files
@@ -304,35 +531,23 @@ def self_test_errors(files: list[str]) -> list[str]:
             if _is_allowed(Path(companion).resolve()):
                 targets.append(companion)
 
-    started = time.monotonic()
+    started = GATE_STARTED  # 起点はプロセス起動時（lint 段の経過を含めて数える・#627 Layer 2）
     for f in targets:
-        elapsed = time.monotonic() - started
-        if elapsed > SELF_TEST_BUDGET_SECONDS:
-            errs.append(
-                f"--self-test 未実行: {f}（PR 前ゲートの実行時間予算 {SELF_TEST_BUDGET_SECONDS}秒を"
-                f"超過。ローカルで `python3 {f} --self-test` を確認してから再度 PR 作成してください）"
-            )
-            continue
         try:
             text = Path(f).read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
         if "--self-test" not in text:
             continue
-        remaining = max(1, int(SELF_TEST_BUDGET_SECONDS - elapsed))
-        per_call_timeout = min(SELF_TEST_PER_TOOL_TIMEOUT, remaining)
-        try:
-            proc = sh([sys.executable, f, "--self-test"], timeout=per_call_timeout)
-        except subprocess.TimeoutExpired:
-            errs.append(f"--self-test タイムアウト: {f}（{per_call_timeout}秒超）")
-            continue
-        except Exception as e:  # noqa: BLE001 - サブプロセス起動失敗等もフェイルオープンさせない
-            errs.append(f"--self-test 実行エラー: {f}: {e}")
-            continue
-        if proc.returncode != 0:
-            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            detail = tail[-1] if tail else "(出力なし)"
-            errs.append(f"--self-test 失敗: {f}（exit={proc.returncode}）: {detail[:200]}")
+        _run_within_budget([sys.executable, f, "--self-test"], "--self-test ", f, started, errs,
+                           f"python3 {f} --self-test")
+
+    # 対応テストスクリプト（tools/test_<name>.sh）の自動実行（Issue #627 対策 C）。
+    # 上の --self-test ループと同じ started 基準の予算（SELF_TEST_BUDGET_SECONDS /
+    # SELF_TEST_PER_TOOL_TIMEOUT）を共有し、合計が pre-pr-create-check.sh の外側
+    # timeout を超えないようにする。
+    for f in _companion_test_script_targets(files):
+        _run_within_budget(["bash", f], "対応テスト", f, started, errs, f"bash {f}")
     return errs
 
 
@@ -392,7 +607,19 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 warnings.append(f"危険パターン検査でエラー: {f}: {e}")
 
-    # --self-test を持つツールの自動実行（Issue #508・PR 作成前ゲート）
+    # bash 構文エラー（Error・ブロック・Issue #627 対策 C）
+    errors.extend(bash_syntax_errors(files))
+
+    # Python 構文エラー（Error・ブロック・Issue #627 対策 C）
+    errors.extend(python_syntax_errors(files))
+
+    # shellcheck（Warning・shellcheck 導入済み環境のみ・Issue #627 対策 C）
+    warnings.extend(shellcheck_warnings(files))
+
+    # ruff E9/F63/F7/F82（Warning・ruff 導入済み環境のみ・Issue #627 対策 C）
+    warnings.extend(ruff_syntax_warnings(files))
+
+    # --self-test / 対応テスト（tools/test_<name>.sh）の自動実行（Issue #508・#627・PR 作成前ゲート）
     # SELF_REVIEW_SELFTEST=warn で Error を非ブロック化する逃げ道を用意
     # （SELF_REVIEW_SECURITY と同じパターン。フレークな self-test 調査中の一時回避用）。
     selftest_findings = self_test_errors(files)
