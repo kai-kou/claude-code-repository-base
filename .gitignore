@@ -9,6 +9,8 @@ content/analytics/*
 !content/analytics/sprint/
 # rejected-edit buffer（skill-creator 本体最適化ループの reject 記録・Issue #514）
 !content/analytics/skillopt/
+# Layer 1 / PR 前レビューの計測 JSONL（code-review スキルが追記・週次集計の入力・Issue #627 対策 E）
+!content/analytics/review/
 # 月次コストレポート（content/analytics/cost_monthly/）は main では追跡しない（#242）。
 # 永続化は tools/commit_cost_telemetry.py がテレメトリ専用データブランチ
 # telemetry/cost-data へ 1 日 1 回 push する（Stop hook 経由・gh 非依存）。

@@ -58,6 +58,7 @@ KNOWN_PUBLISH_ONLY_EXTRAS = {
     "LICENSE",
     "NOTICE",
     "CLAUDE.md",
+    "REVIEW.md",   # PROTECT_PATHS 経由で配置される較正ファイル（CLAUDE.md と同じ扱い・#627）
     ".gitignore",
     "docs/project-mission.md",
     "docs/CONTEXT.md",

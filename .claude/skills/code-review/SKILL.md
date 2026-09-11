@@ -295,6 +295,33 @@ add_comment_to_pending_review が失敗
 
 `create` / `submit_pending` 自体が失敗した場合も放置しない（次セッションが Step 0 の PENDING 検出で回収する）。
 
+#### Step 3-C: 計測記録（pre-pr / pr モードで必須・#627 対策 E）
+
+レビュー 1 回ごとに 1 行、`content/analytics/review/layer1_findings.jsonl` へ追記する（GitHub API 不要・クラウドでも成立。
+pre-pr は Step 3 のサマリー確定後、pr は Step 3-A の submit 後に返信 / Resolve と同時に実行する）。**worktree モード（PR の無い
+作業ツリー差分レビュー）は記録しない**（`--phase` は `pre` / `post` の 2 値。PR 前レビューの指標を汚さないため）。週次集計
+（指摘ゼロ PR 率・CONFIRMED / PR・観点別推移・同種指摘候補）は `workflow-health-check` の週次ゲート（`reference.md` 4-e）が
+`tools/layer1_findings_report.py` で行う。
+
+```bash
+# pr モード（例: ラウンド 2・CONFIRMED 🔴0 🟡4 ⚪0・インライン 4・修正 4）。--finding は CONFIRMED 各件（同種指摘の検出用）
+python3 tools/record_layer1_findings.py --pr {N} --phase post --round {n} --head-sha {sha} \
+  --confirmed {c},{w},{n} --plausible {p} --refuted {r} --inline {m} --fixed {f} --skipped {g} \
+  --perspectives "正確性,セキュリティ,..." --review-md {applied|not_in_base|none} \
+  --finding "WARNING|正確性|path:line|要旨" --finding "..."
+# pre-pr モード（PR 番号なし・ブランチで識別。--fixed / --skipped は Step 3 の修正結果）
+python3 tools/record_layer1_findings.py --phase pre --confirmed {c},{w},{n} --plausible {p} --refuted {r} \
+  --fixed {f} --skipped {g} --perspectives "..." --review-md {applied|not_in_base|none} --finding "..."
+```
+
+- 追記した JSONL は **同じ PR に含めてコミットする**（pre-pr は次のコミットに同梱、pr は各ラウンドの修正コミットに同梱し、
+  修正が無いラウンド＝指摘ゼロや見送りのみのときは `chore: レビュー計測を記録` のコミットを切る）。マージ条件は Layer 0 + 1 の
+  通過なので、記録は必ずマージ前に PR へ入る（マージ後に記録だけを main へ入れる経路は無い）。コミットしないとクラウドでは
+  コンテナ破棄で消える
+- 件数は Step 3-A のサマリー冒頭行（pre-pr は呼び出し元へ返す 1 行）と一致させる（食い違いは L-113 の捏造にあたる）。
+  **指摘ゼロでも記録する**（「指摘ゼロ PR 率」の分母になる）
+- 記録を省いて件数を良く見せない（gaming 防止。計測は較正専用の観測値として扱い、指摘件数を「下げるべき KPI」にしない）
+
 ## 注意（再発防止）
 
 - 本スキルの frontmatter に `disable-model-invocation` を **追加しない**（追加すると自律起動が再び不能になり本スキルの存在意義が消える）

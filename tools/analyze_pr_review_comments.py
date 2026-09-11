@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """analyze_pr_review_comments.py — PR レビューコメント全量分析（週次定期実行用）
 
-過去全 PR の inline レビューコメントを取得し、AI レビュアー（Gemini/Copilot）の指摘を
+過去全 PR の inline レビューコメントを取得し、AI レビュー指摘（既定: Layer 1 セルフレビューの
+テンプレート本文で判定。`--legacy-reviewers` で廃止済みの Gemini / Copilot のログイン名判定も併用）を
 カテゴリ分類・集計して、セルフレビュー・チェックシートの更新判断材料を生成する。
 
 初回分析（2026-06・Issue #2860）の再現可能版。カテゴリルールは本ツールが正本であり、
@@ -17,6 +18,8 @@ Usage:
     python3 tools/analyze_pr_review_comments.py --report           # docs/analysis/ にレポート+統計を保存
     python3 tools/analyze_pr_review_comments.py --input /tmp/c.json  # 取得済みファイルを使用
     python3 tools/analyze_pr_review_comments.py --json             # 統計 JSON を stdout 出力
+    python3 tools/analyze_pr_review_comments.py --legacy-reviewers # 旧 Gemini / Copilot コメントも AI 指摘に含める
+    python3 tools/analyze_pr_review_comments.py --self-test        # 判定ロジックの内蔵テスト
 
 実行タイミング: 毎週月曜の 07:00 スロット ⑤.7（{プロジェクト定義: hourly-routing 相当}・週次化 #2900）
 Exit code: 0 = 正常 / 1 = 取得・解析失敗
@@ -41,6 +44,16 @@ ANALYSIS_DIR = Path(__file__).resolve().parent.parent / "docs" / "analysis"
 # AI レビュアーのログイン名部分一致パターン（小文字・lower 比較）。
 # "copilot" は Copilot / copilot[bot] / copilot-pull-request-reviewer[bot] を全てカバーする
 AI_REVIEWER_PATTERNS = ("gemini-code-assist", "copilot")
+
+# Layer 1 セルフレビュー（.claude/skills/code-review/ Step 3-A）のインラインコメント本文テンプレート
+# `**🔴 CRITICAL** ・ **CONFIRMED** ・ 観点: 正確性`。外部 AI レビュアー（Gemini / Copilot）は廃止済み
+# （ai-reviewer-strategy.md）のため、AI 指摘の既定の判定は「ログイン名」ではなく「本文がこのテンプレートか」
+# で行う（Issue #627 対策 E）。PLAUSIBLE のインライン化は #627 で廃止したが、それ以前の投稿を検出できるよう
+# 確度の選択肢に残す。
+LAYER1_FINDING_RE = re.compile(
+    r"\*\*(?P<sev>🔴 CRITICAL|🟡 WARNING|⚪ NIT)\*\*\s*・\s*\*\*(?P<conf>CONFIRMED|PLAUSIBLE)\*\*"
+)
+LAYER1_SEVERITY = {"🔴 CRITICAL": "critical", "🟡 WARNING": "warning", "⚪ NIT": "nit"}
 
 # カテゴリ分類ルールの組み込み既定値（config/pr_review_comment_categories.json が無い/壊れている
 # ときのフォールバック。内容は同ファイルの既定値と同一に保つ・#420）。
@@ -149,8 +162,23 @@ def parse_concatenated_json(raw: str) -> list:
 
 
 def is_ai_reviewer(login: str) -> bool:
+    """旧経路: 外部 AI レビュアー（Gemini / Copilot）のログイン名判定（--legacy-reviewers 時のみ使う）。"""
     login_lower = login.lower()
     return any(p.lower() in login_lower for p in AI_REVIEWER_PATTERNS)
+
+
+def is_layer1_finding(body: str) -> bool:
+    """本文が Layer 1 セルフレビューの指摘テンプレートか（既定の AI 指摘判定・#627 対策 E）。"""
+    return bool(LAYER1_FINDING_RE.search(body or ""))
+
+
+def reviewer_key(login: str, body: str, legacy: bool = False) -> "str | None":
+    """コメントを AI 指摘として数えるなら reviewer キー（layer1 / gemini / copilot）、数えないなら None。"""
+    if is_layer1_finding(body):
+        return "layer1"
+    if legacy and is_ai_reviewer(login):
+        return "gemini" if "gemini" in login.lower() else "copilot"
+    return None
 
 
 def classify(body: str) -> tuple[str, str]:
@@ -161,13 +189,16 @@ def classify(body: str) -> tuple[str, str]:
 
 
 def severity_of(body: str) -> "str | None":
-    for sev, badges in SEVERITY_BADGES:
+    m = LAYER1_FINDING_RE.search(body or "")
+    if m:  # Layer 1 テンプレート（critical / warning / nit）
+        return LAYER1_SEVERITY[m.group("sev")]
+    for sev, badges in SEVERITY_BADGES:  # 旧 Gemini のバッジ画像
         if any(b in body for b in badges):
             return sev
     return None
 
 
-def analyze(comments: list) -> dict:
+def analyze(comments: list, legacy: bool = False) -> dict:
     pr_re = re.compile(r"/pulls/(\d+)")
     stats = {
         "generated_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M JST"),
@@ -196,10 +227,11 @@ def analyze(comments: list) -> dict:
         pr = m.group(1) if m else None
         if pr:
             prs.add(pr)
-        if not is_ai_reviewer(login):
+        rkey = reviewer_key(login, body, legacy)
+        if rkey is None:
             continue
         stats["ai_comments"] += 1
-        reviewer_counter["gemini" if "gemini" in login.lower() else "copilot"] += 1
+        reviewer_counter[rkey] += 1
         created = c.get("created_at") or ""
         if len(created) >= 7:
             monthly[created[:7]] += 1
@@ -291,10 +323,12 @@ def render_report(stats: dict, prev_path: "Path | None") -> str:
         f"| 取得日 | {stats['generated_at']} |",
         f"| inline レビューコメント総数 | {stats['total_comments']:,} 件 |",
         f"| 対象 PR 数（コメント付き） | {stats['prs_with_comments']:,} PR |",
-        f"| AI レビュアー指摘 | {stats['ai_comments']:,} 件"
-        f"（Gemini {stats['ai_by_reviewer'].get('gemini', 0):,} / Copilot {stats['ai_by_reviewer'].get('copilot', 0):,}） |",
-        f"| Gemini 重大度 | critical {stats['severity'].get('critical', 0)}"
-        f" / high {stats['severity'].get('high', 0)} / medium {stats['severity'].get('medium', 0)} |",
+        f"| AI レビュー指摘 | {stats['ai_comments']:,} 件"
+        f"（Layer 1 {stats['ai_by_reviewer'].get('layer1', 0):,} / 旧 Gemini {stats['ai_by_reviewer'].get('gemini', 0):,}"
+        f" / 旧 Copilot {stats['ai_by_reviewer'].get('copilot', 0):,}） |",
+        f"| 重大度 | Layer 1: critical {stats['severity'].get('critical', 0)}"
+        f" / warning {stats['severity'].get('warning', 0)} / nit {stats['severity'].get('nit', 0)}"
+        f"（旧 Gemini: high {stats['severity'].get('high', 0)} / medium {stats['severity'].get('medium', 0)}） |",
         "",
         "## 2. カテゴリ別分布（AI 指摘・件数順）",
         "",
@@ -321,13 +355,69 @@ def render_report(stats: dict, prev_path: "Path | None") -> str:
     return "\n".join(lines)
 
 
+def run_self_test() -> int:
+    """AI 指摘の判定（Layer 1 テンプレート / 旧ログイン名）と severity 抽出の内蔵テスト（#627 対策 E）。"""
+    ok = True
+    l1_body = "**🟡 WARNING** ・ **CONFIRMED** ・ 観点: 正確性\n\n欠陥の 1 文"
+    l1_plausible = "**⚪ NIT** ・ **PLAUSIBLE** ・ 観点: 簡素化"
+    gemini_body = "![critical](https://.../codereviewagent/critical.svg) 指摘"
+    cases = [
+        (("kai-kou", l1_body, False), "layer1"),
+        (("kai-kou", l1_plausible, False), "layer1"),
+        (("kai-kou", "ふつうの人手コメント", False), None),
+        (("gemini-code-assist[bot]", gemini_body, False), None),   # 既定では旧レビュアーを数えない
+        (("gemini-code-assist[bot]", gemini_body, True), "gemini"),
+        (("copilot-pull-request-reviewer[bot]", "x", True), "copilot"),
+        (("copilot-pull-request-reviewer[bot]", l1_body, False), "layer1"),  # 本文優先
+    ]
+    failed = 0
+    for (login, body, legacy), expected in cases:
+        got = reviewer_key(login, body, legacy)
+        if got != expected:
+            print(f"FAIL: reviewer_key({login!r}, legacy={legacy}) = {got!r}（期待 {expected!r}）"); ok = False; failed += 1
+    if not failed:
+        print(f"PASS: reviewer_key {len(cases)} ケース（Layer 1 テンプレート優先・旧レビュアーは --legacy-reviewers 時のみ）")
+    sev_cases = [(l1_body, "warning"), (l1_plausible, "nit"),
+                 ("**🔴 CRITICAL** ・ **CONFIRMED** ・ 観点: セキュリティ", "critical"),
+                 (gemini_body, "critical"), ("high-priority.svg", "high"), ("なし", None)]
+    failed = 0
+    for body, expected in sev_cases:
+        if severity_of(body) != expected:
+            print(f"FAIL: severity_of({body[:30]!r}) = {severity_of(body)!r}（期待 {expected!r}）"); ok = False; failed += 1
+    if not failed:
+        print(f"PASS: severity_of {len(sev_cases)} ケース（Layer 1 の 3 段階 + 旧 Gemini バッジ）")
+    comments = [
+        {"user": {"login": "kai-kou"}, "body": l1_body, "pull_request_url": "https://x/pulls/10",
+         "created_at": "2026-09-01T00:00:00Z"},
+        {"user": {"login": "kai-kou"}, "body": "人手", "pull_request_url": "https://x/pulls/10",
+         "created_at": "2026-09-01T00:00:00Z"},
+        {"user": {"login": "gemini-code-assist[bot]"}, "body": gemini_body,
+         "pull_request_url": "https://x/pulls/11", "created_at": "2026-06-01T00:00:00Z"},
+    ]
+    st = analyze(comments)
+    st_legacy = analyze(comments, legacy=True)
+    if st["ai_comments"] == 1 and st["ai_by_reviewer"] == {"layer1": 1} and st["severity"] == {"warning": 1} \
+            and st_legacy["ai_comments"] == 2 and st_legacy["ai_by_reviewer"] == {"layer1": 1, "gemini": 1}:
+        print("PASS: analyze（既定は Layer 1 のみ・--legacy-reviewers で旧コメントも加算）")
+    else:
+        print(f"FAIL: analyze: {st['ai_by_reviewer']} / legacy {st_legacy['ai_by_reviewer']}"); ok = False
+    print("=== self-test:", "PASS ===" if ok else "FAIL ===")
+    return 0 if ok else 1
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input", help="取得済み JSON ファイル（gh api --paginate の生出力）")
     ap.add_argument("--report", action="store_true",
                     help="docs/analysis/ にレポート Markdown + 統計 JSON を保存")
     ap.add_argument("--json", action="store_true", help="統計 JSON を stdout 出力")
+    ap.add_argument("--legacy-reviewers", action="store_true",
+                    help="廃止済みの Gemini / Copilot のログイン名判定も AI 指摘に含める（過去分析用）")
+    ap.add_argument("--self-test", action="store_true", help="判定ロジックの内蔵テスト")
     args = ap.parse_args()
+
+    if args.self_test:
+        sys.exit(run_self_test())
 
     if args.input:
         try:
@@ -346,7 +436,7 @@ def main() -> None:
         print(f"ERROR: JSON 解析失敗: {e}", file=sys.stderr)
         sys.exit(1)
 
-    stats = analyze(comments)
+    stats = analyze(comments, legacy=args.legacy_reviewers)
 
     if args.json:
         print(json.dumps(stats, ensure_ascii=False, indent=2))

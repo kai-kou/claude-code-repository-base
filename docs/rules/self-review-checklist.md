@@ -20,8 +20,9 @@
 > |--------|------|------|
 > | `tools/analyze_pr_review_comments.py` | **全期間累積** スナップショット・本シート反映の判断材料（カテゴリ別件数） | `docs/analysis/pr_review_stats_*.json` |
 > | `tools/pr_review_trends.py` | **週次フローの時系列**・セルフレビューが効いているかの可視化（指摘ゼロPR率の推移を週次で Slack グラフ投稿） | `content/analytics/pr_review_trends.jsonl` |
+> | `tools/record_layer1_findings.py` → `tools/layer1_findings_report.py` | **Layer 1 / PR 前レビューの実測**（GitHub API 不要・クラウドでも成立・#627 対策 E）。`code-review` がレビューごとに追記し、週次で指摘ゼロ PR 率・CONFIRMED / PR・同種指摘候補を集計（`workflow-health-check` 4-e） | `content/analytics/review/layer1_findings.jsonl` |
 >
-> severity / AIレビュアー判定ロジックは前者が SSOT で、後者は import 再利用する。主指標「指摘ゼロPR率」の分母は **週内マージ全PR数**（指摘ゼロPR も含む）であり、`prs_with_comments`（指摘付きPRのみ）を分母にしない（比率が下がらず無意味になるため・技術監修役指摘）。
+> severity / AI 指摘判定ロジックは前者が SSOT で、後者は import 再利用する。AI 指摘の判定は **Layer 1 セルフレビューのテンプレート本文**（`**🔴 CRITICAL** ・ **CONFIRMED**`）で行い、廃止済みの Gemini / Copilot のログイン名判定は `--legacy-reviewers` を付けたときだけ併用する（#627 対策 E）。主指標「指摘ゼロPR率」の分母は **週内マージ全PR数**（指摘ゼロPR も含む）であり、`prs_with_comments`（指摘付きPRのみ）を分母にしない（比率が下がらず無意味になるため・技術監修役指摘）。
 
 ---
 
@@ -128,4 +129,4 @@
 1. PR マージ後、self-reviewer スキル Step F-1〜F-4（AI レビュー指摘の学習）を実行する
 2. 同種指摘が 2 回以上 → 本シートに行を追加 + 機械化可能なら `self_review_check.py` にチェックを追加（**同一 PR で**）
 3. 同種指摘が 3 回以上 → Lv3 フックへの昇格を検討（`docs/rules/harness-escalation.md`。Lv4 CI は現時点不採用・飼い主決定 #298 のため昇格先にしない）
-4. **週次定期再分析（自動スケジュール済み・Issue #2870/#2900）**: 毎週月曜の 07:00 スロット ⑤.7 で `python3 tools/analyze_pr_review_comments.py --report` を実行し、前週比デルタ（カテゴリ +10 件/週以上・新出カテゴリ・機械化済みカテゴリの増加）を確認して本シート + チェッカーを更新する。週 ~90 PR ペースのため週次でないと同種指摘が頻発する。手順詳細は プロジェクト定義のスケジューリング詳細ファイル（例: `{プロジェクト定義: hourly-routing 相当}` ⑤.7 等）、分類ルールの正本は `config/pr_review_comment_categories.json`（無い/壊れている場合のみ同ツールの `DEFAULT_CATEGORY_RULES` にフォールバック・#420）
+4. **週次定期再分析（自動スケジュール済み・Issue #2870/#2900）**: 毎週月曜の 07:00 スロット ⑤.7 で `python3 tools/analyze_pr_review_comments.py --report` と `python3 tools/layer1_findings_report.py --weeks 4`（Layer 1 実測・同種指摘 2 回以上の候補・#627 対策 E）を実行し、前週比デルタ（カテゴリ +10 件/週以上・新出カテゴリ・機械化済みカテゴリの増加）を確認して本シート + チェッカーを更新する。週 ~90 PR ペースのため週次でないと同種指摘が頻発する。手順詳細は プロジェクト定義のスケジューリング詳細ファイル（例: `{プロジェクト定義: hourly-routing 相当}` ⑤.7 等）、分類ルールの正本は `config/pr_review_comment_categories.json`（無い/壊れている場合のみ同ツールの `DEFAULT_CATEGORY_RULES` にフォールバック・#420）

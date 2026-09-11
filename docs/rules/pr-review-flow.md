@@ -40,6 +40,7 @@
 可能な場合は **Agent Teams（並列サブエージェント）** を使って複数の観点から同時にレビューする。
 
 - **PR 作成前フレッシュ文脈レビュー（Step 3.5・#627）**: `has_code` または `high_risk` の差分（データのみの差分を除く）は `Skill(code-review)` を `--pre-pr` で実行し、CONFIRMED を修正してから PR を作る（PR 本文に `PR 前レビュー:` 1 行を記録。`high_risk` はエッジケース表も書く）
+- **計測記録（#627 対策 E）**: `code-review` はレビュー 1 回ごと（PR 前 / PR 後の各ラウンド・指摘ゼロでも）に `python3 tools/record_layer1_findings.py` で `content/analytics/review/layer1_findings.jsonl` に 1 行追記し、同じ PR にコミットする（GitHub API 不要。手順は `code-review` SKILL.md Step 3-C）。週次集計は `workflow-health-check` 4-e（`tools/layer1_findings_report.py`）
 - 実装が完了し、コミットが揃った段階で実行
 - Error 深刻度の問題が残っている場合、修正してから PR 作成へ
 - セルフレビューで自動修正を行った場合、 **即座にコミット＆push** する（未コミットのままPR作成に進まない）

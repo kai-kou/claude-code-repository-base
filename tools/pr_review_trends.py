@@ -16,8 +16,8 @@ severity / AI レビュアー判定ロジックは analyze_pr_review_comments.py
 バケットしない（UTC/JST 週境界のズレ・後追いレビューの混入を避けるため）。
 
   - 主指標: 指摘ゼロ PR 率 = 指摘ゼロでマージされた PR 数 / 週内マージ全 PR 数（右肩上がりが善）
-  - 補助: PR あたり AI 指摘数（reviewer 別: Gemini / Copilot）。Gemini は 2026-07-17 停止予定のため
-          合算線は崖落ちする → Copilot 単独線を継続トレンドとして主役にできるよう reviewer 別に保持
+  - 補助: PR あたり AI 指摘数（reviewer 別: layer1 = Layer 1 セルフレビューのテンプレート本文で判定・
+          #627 対策 E。廃止済みの Gemini / Copilot は --legacy-reviewers を付けたときだけ旧系列として保持）
   - 補助: 週次マージ PR 数（母数）/ severity 別 / 修正数(proxy=AI 指摘の付いた PR 数)
   - 直近週は provisional（レビューは後から増えるため確定は週末から 8 日以上経過後）
 
@@ -28,6 +28,7 @@ Usage:
     python3 tools/pr_review_trends.py --all               # update → render → notify を一括
     python3 tools/pr_review_trends.py --weeks 16 --all    # 集計対象を直近 16 週に
     python3 tools/pr_review_trends.py --self-test         # 内蔵フィクスチャで検証
+    python3 tools/pr_review_trends.py --update --legacy-reviewers  # 旧 Gemini / Copilot コメントも加算
 
 実行タイミング: 毎週月曜 07:00 スロット ⑤.7（{プロジェクト定義: hourly-routing 相当}）
 Exit code: 0 = 正常 / 1 = 失敗
@@ -59,10 +60,13 @@ _PR_RE = re.compile(r"/pulls/(\d+)")
 # analyze_pr_review_comments.py のロジックを再利用（SSOT・同 tools/ ディレクトリ・sys.path は上で追加済み）
 try:
     from analyze_pr_review_comments import (  # noqa: E402
-        fetch_comments, parse_concatenated_json, is_ai_reviewer, severity_of,
+        fetch_comments, parse_concatenated_json, severity_of, reviewer_key,
     )
 except ImportError:  # 単体テスト・分離実行時のフォールバック（--self-test は import 不要で動く）
-    fetch_comments = parse_concatenated_json = is_ai_reviewer = severity_of = None
+    fetch_comments = parse_concatenated_json = severity_of = reviewer_key = None
+
+# reviewer 別系列のキー。layer1 が現行（#627 対策 E）、gemini / copilot は廃止済み外部レビュアーの旧系列
+REVIEWER_KEYS = ("layer1", "gemini", "copilot")
 
 
 # ─────────────────────────── 週境界ユーティリティ ───────────────────────────
@@ -128,9 +132,11 @@ def fetch_merged_prs(week_start: date, week_end: date) -> "list[dict] | None":
         return None
 
 
-def build_ai_index(comments: list) -> dict:
+def build_ai_index(comments: list, legacy: bool = False) -> dict:
     """全 inline コメントから PR 番号 → AI 指摘情報のインデックスを作る。
 
+    判定は analyze_pr_review_comments.reviewer_key（既定: Layer 1 テンプレート本文。legacy=True で
+    旧 Gemini / Copilot のログイン名も）に委ねる（SSOT・#627 対策 E）。
     返り値: {pr_number(int): {"count":N, "by_reviewer":{...}, "severity":{...}}}
     """
     index: dict = defaultdict(lambda: {"count": 0, "by_reviewer": Counter(), "severity": Counter()})
@@ -138,16 +144,17 @@ def build_ai_index(comments: list) -> dict:
         if not isinstance(c, dict):
             continue
         login = (c.get("user") or {}).get("login", "")
-        if not is_ai_reviewer(login):
+        body = c.get("body") or ""
+        rkey = reviewer_key(login, body, legacy)
+        if rkey is None:
             continue
         m = _PR_RE.search(c.get("pull_request_url") or "")
         if not m:
             continue
         pr = int(m.group(1))
-        body = c.get("body") or ""
         entry = index[pr]
         entry["count"] += 1
-        entry["by_reviewer"]["gemini" if "gemini" in login.lower() else "copilot"] += 1
+        entry["by_reviewer"][rkey] += 1
         sev = severity_of(body)
         if sev:
             entry["severity"][sev] += 1
@@ -189,8 +196,11 @@ def aggregate_week(merged: "list[dict]", ai_index: dict) -> dict:
         "ai_comments": ai_comments,
         "ai_by_reviewer": dict(by_reviewer),
         "comments_per_pr": round(ai_comments / prs_merged, 3) if prs_merged else None,
+        # layer1 は常に載せる。廃止済みの旧系列（gemini / copilot）は実データがある週だけ載せる
+        # （常に 0.0 を保存すると描画側の「値がある週だけ旧系列を描く」判定が無効になる・#627 PR-2 レビュー指摘）
         "comments_per_pr_by_reviewer": {
-            r: round(by_reviewer.get(r, 0) / prs_merged, 3) for r in ("gemini", "copilot")
+            r: round(by_reviewer.get(r, 0) / prs_merged, 3)
+            for r in REVIEWER_KEYS if r == "layer1" or by_reviewer.get(r)
         } if prs_merged else {},
         "severity": dict(severity),
         # 修正数 proxy: AI 指摘が付いて（=修正を要し）マージされた PR 数。
@@ -233,8 +243,8 @@ def save_trends(rows: "dict[str, dict]") -> None:
     )
 
 
-def update_trends(weeks: int, today: "date | None" = None) -> "dict[str, dict]":
-    """直近 weeks 週のメトリクスを取得し JSONL を冪等更新する。"""
+def update_trends(weeks: int, today: "date | None" = None, legacy: bool = False) -> "dict[str, dict]":
+    """直近 weeks 週のメトリクスを取得し JSONL を冪等更新する（legacy=True で旧 Gemini / Copilot も加算）。"""
     if fetch_comments is None:
         print("ERROR: analyze_pr_review_comments の import に失敗（同 tools/ に存在するか確認）",
               file=sys.stderr)
@@ -242,7 +252,7 @@ def update_trends(weeks: int, today: "date | None" = None) -> "dict[str, dict]":
     print("[trends] gh api --paginate で全レビューコメントを取得中（数分かかる）...",
           file=sys.stderr)
     comments = parse_concatenated_json(fetch_comments())
-    ai_index = build_ai_index(comments)
+    ai_index = build_ai_index(comments, legacy)
 
     rows = load_trends()
     for iso, w_start, w_end in recent_weeks(weeks, today):
@@ -291,6 +301,18 @@ def _rows_sorted(rows: "dict[str, dict]") -> list:
     return [rows[k] for k in sorted(rows.keys())]
 
 
+def _reviewer_series(data: list) -> "dict[str, list]":
+    """描画する reviewer 別系列。layer1 は常に描き、廃止済みの旧系列（gemini / copilot）は
+    非ゼロの値がある週が 1 つでもあるときだけ描く（0.0 だけのフラットラインを出さない）。
+    matplotlib 不在環境でも検証できるよう描画本体から分離してある（#627 PR-2 レビュー指摘）。"""
+    series = {}
+    for key in REVIEWER_KEYS:
+        vals = [(r.get("comments_per_pr_by_reviewer") or {}).get(key) for r in data]
+        if key == "layer1" or any(vals):
+            series[key] = vals
+    return series
+
+
 def render_matplotlib(rows: "dict[str, dict]", out_path: Path) -> bool:
     """matplotlib で週次トレンドグラフ（3 パネル）を描画する。成功で True。"""
     try:
@@ -312,8 +334,7 @@ def render_matplotlib(rows: "dict[str, dict]", out_path: Path) -> bool:
             return False
         labels = [r["iso_week"].replace("-W", "\nW") for r in data]
         zero_rate = [(r.get("zero_comment_pr_rate") or 0) * 100 if r.get("zero_comment_pr_rate") is not None else None for r in data]
-        gem = [(r.get("comments_per_pr_by_reviewer") or {}).get("gemini") for r in data]
-        cop = [(r.get("comments_per_pr_by_reviewer") or {}).get("copilot") for r in data]
+        series = _reviewer_series(data)
         prs = [r.get("prs_merged") or 0 for r in data]
         ai = [r.get("ai_comments") or 0 for r in data]
         x = list(range(len(data)))
@@ -334,14 +355,15 @@ def render_matplotlib(rows: "dict[str, dict]", out_path: Path) -> bool:
         ax.legend(loc="upper left", fontsize=9)
         ax.grid(True, alpha=0.3)
 
-        # パネル2: PR あたり指摘数（reviewer 別・Gemini 停止に備え分離）
+        # パネル2: PR あたり指摘数（Layer 1 が主系列。旧 Gemini / Copilot は _reviewer_series が選んだときだけ描く）
         ax = axes[1]
-        ax.plot(x, [v if v is not None else float("nan") for v in gem],
-                marker="s", color="#1565c0", label="Gemini /PR")
-        ax.plot(x, [v if v is not None else float("nan") for v in cop],
-                marker="^", color="#ef6c00", label="Copilot /PR")
+        styles = {"layer1": ("o", "#6a1b9a", "Layer 1 /PR"), "gemini": ("s", "#1565c0", "Gemini /PR（旧）"),
+                  "copilot": ("^", "#ef6c00", "Copilot /PR（旧）")}
+        for key, vals in series.items():
+            marker, color, label = styles[key]
+            ax.plot(x, [v if v is not None else float("nan") for v in vals], marker=marker, color=color, label=label)
         ax.set_ylabel("PRあたり指摘数")
-        ax.set_title("② PRあたりAI指摘数（reviewer別・低いほど良い／Gemini は 2026-07 停止予定）")
+        ax.set_title("② PRあたりAI指摘数（Layer 1 セルフレビュー・低いほど良い／Gemini・Copilot は廃止済みの旧系列）")
         ax.legend(loc="upper right", fontsize=9)
         ax.grid(True, alpha=0.3)
 
@@ -441,9 +463,11 @@ def build_summary(rows: "dict[str, dict]") -> str:
 
     lines = [f"*最新週 {latest['iso_week']}*" + ("（暫定）" if latest.get("provisional") else "")]
     lines.append(f"• マージPR数: {latest.get('prs_merged')} 件")
+    by_rev = latest.get("ai_by_reviewer", {}) or {}
+    legacy_note = (f" / 旧 Gemini {by_rev.get('gemini', 0)} / 旧 Copilot {by_rev.get('copilot', 0)}"
+                   if by_rev.get("gemini") or by_rev.get("copilot") else "")
     lines.append(f"• AIレビュー指摘数: {latest.get('ai_comments')} 件"
-                 f"（Gemini {latest.get('ai_by_reviewer',{}).get('gemini',0)} / "
-                 f"Copilot {latest.get('ai_by_reviewer',{}).get('copilot',0)}）")
+                 f"（Layer 1 {by_rev.get('layer1', 0)}{legacy_note}）")
     lines.append(f"• 修正を要したPR数(修正数proxy): {latest.get('fixes_proxy')} 件")
     cur_rate = _pct(latest)
     if prev:
@@ -604,13 +628,31 @@ def self_test() -> int:
     merged = [{"number": 1, "title": "[V001] x"}, {"number": 2, "title": "fix: y"},
               {"number": 3, "title": "[V002] z"}, {"number": 4, "title": "docs: w"}]
     ai_index = {
-        1: {"count": 3, "by_reviewer": Counter({"gemini": 2, "copilot": 1}),
+        1: {"count": 3, "by_reviewer": Counter({"layer1": 2, "copilot": 1}),
             "severity": Counter({"high": 1})},
-        3: {"count": 1, "by_reviewer": Counter({"copilot": 1}), "severity": Counter()},
+        3: {"count": 1, "by_reviewer": Counter({"layer1": 1}), "severity": Counter()},
     }
     m = aggregate_week(merged, ai_index)
+    if reviewer_key is not None:
+        # Layer 1 テンプレート本文で判定し、旧ログイン名は legacy=True のときだけ数える（#627 対策 E）
+        l1_body = "**🟡 WARNING** ・ **CONFIRMED** ・ 観点: 正確性\n\n欠陥"
+        comments = [
+            {"user": {"login": "kai-kou"}, "body": l1_body, "pull_request_url": "https://x/pulls/7"},
+            {"user": {"login": "kai-kou"}, "body": "人手コメント", "pull_request_url": "https://x/pulls/7"},
+            {"user": {"login": "copilot-pull-request-reviewer[bot]"}, "body": "旧", "pull_request_url": "https://x/pulls/8"},
+        ]
+        idx = build_ai_index(comments)
+        idx_legacy = build_ai_index(comments, legacy=True)
+        if dict(idx[7]["by_reviewer"]) == {"layer1": 1} and 8 not in idx and dict(idx[7]["severity"]) == {"warning": 1} \
+                and dict(idx_legacy[8]["by_reviewer"]) == {"copilot": 1}:
+            print("PASS: build_ai_index（Layer 1 テンプレート判定・旧レビュアーは legacy 時のみ）")
+        else:
+            print(f"FAIL: build_ai_index: {dict(idx)} / legacy {dict(idx_legacy)}"); ok = False
     if m["prs_merged"] != 4 or m["prs_with_ai_comments"] != 2 or m["zero_comment_prs"] != 2:
         print(f"FAIL: 集計件数誤り {m}"); ok = False
+    elif m["comments_per_pr_by_reviewer"].get("layer1") != 0.75 or m["comments_per_pr_by_reviewer"].get("copilot") != 0.25 \
+            or "gemini" in m["comments_per_pr_by_reviewer"]:
+        print(f"FAIL: reviewer 別 PR あたり指摘数（layer1 常設・旧系列は実データがある週だけ）誤り {m['comments_per_pr_by_reviewer']}"); ok = False
     elif abs(m["zero_comment_pr_rate"] - 0.5) > 1e-9:
         print(f"FAIL: 指摘ゼロPR率誤り {m['zero_comment_pr_rate']}（期待 0.5）"); ok = False
     elif m["ai_comments"] != 4 or m["comments_per_pr"] != 1.0:
@@ -647,10 +689,10 @@ def self_test() -> int:
 
     # 5. 描画フォールバック連鎖（matplotlib or Pillow or テキスト縮退）
     sample = {"2026-W23": {"iso_week": "2026-W23", "prs_merged": 8, "zero_comment_pr_rate": 0.4,
-                           "comments_per_pr_by_reviewer": {"gemini": 1.0, "copilot": 0.5},
+                           "comments_per_pr_by_reviewer": {"layer1": 1.0, "copilot": 0.5},
                            "ai_comments": 12},
               "2026-W24": {"iso_week": "2026-W24", "prs_merged": 10, "zero_comment_pr_rate": 0.6,
-                           "comments_per_pr_by_reviewer": {"gemini": 0.8, "copilot": 0.4},
+                           "comments_per_pr_by_reviewer": {"layer1": 0.8, "copilot": 0.4},
                            "ai_comments": 12}}
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "c.png"
@@ -661,6 +703,16 @@ def self_test() -> int:
             print("PASS: 描画フォールバック連鎖（PNG 生成成功）")
         else:
             print("FAIL: 描画結果が不正"); ok = False
+
+    # 5b. 描画する reviewer 系列の選択（matplotlib 不在でも検証できる純粋関数）
+    data_zero = [{"comments_per_pr_by_reviewer": {"layer1": 1.0, "gemini": 0.0}},
+                 {"comments_per_pr_by_reviewer": {"layer1": 0.0}}]
+    data_legacy = [{"comments_per_pr_by_reviewer": {"layer1": 1.0, "gemini": 0.5}}]
+    if set(_reviewer_series(data_zero)) == {"layer1"} and set(_reviewer_series(data_legacy)) == {"layer1", "gemini"} \
+            and _reviewer_series(data_zero)["layer1"] == [1.0, 0.0]:
+        print("PASS: 旧系列は非ゼロの値がある週があるときだけ描画対象にする（layer1 は常に描く）")
+    else:
+        print(f"FAIL: _reviewer_series: {_reviewer_series(data_zero)} / {_reviewer_series(data_legacy)}"); ok = False
 
     # 6. サマリー生成
     s = build_summary(sample)
@@ -684,6 +736,8 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="update → render → notify を一括")
     ap.add_argument("--weeks", type=int, default=12, help="集計対象週数（既定 12）")
     ap.add_argument("--no-issue", action="store_true", help="悪化検知 Issue の自動起票を抑制")
+    ap.add_argument("--legacy-reviewers", action="store_true",
+                    help="廃止済みの Gemini / Copilot のログイン名判定も AI 指摘に含める（過去分析用）")
     ap.add_argument("--self-test", action="store_true", help="内蔵フィクスチャで検証")
     args = ap.parse_args()
 
@@ -697,7 +751,7 @@ def main() -> int:
         ap.print_help()
         return 0
 
-    rows = update_trends(args.weeks) if do_update else load_trends()
+    rows = update_trends(args.weeks, legacy=args.legacy_reviewers) if do_update else load_trends()
     if not rows:
         print("ERROR: トレンドデータがありません（先に --update を実行してください）", file=sys.stderr)
         return 1

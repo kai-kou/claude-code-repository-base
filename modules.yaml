@@ -84,6 +84,8 @@ modules:
       - test_pr_confirm_marker.sh   # post-pr-confirm-mark.sh × stop-pr-check.sh の e2e（#543）
       - self_review_check.py
       - test_self_review_check.sh   # Layer 0 構文検査・対応テスト自動実行の回帰テスト（#627）
+      - record_layer1_findings.py   # Layer 1 / PR 前レビューの結果を JSONL に追記（計測・#627 対策 E）
+      - layer1_findings_report.py   # 同 JSONL の週次集計（指摘ゼロ PR 率・同種指摘候補・#627 対策 E）
       - test_pre_pr_create_check.sh # PR 本文の検証証跡チェックの回帰テスト（#627）
       - detect_pr_diff_type.py
       - analyze_pr_review_comments.py

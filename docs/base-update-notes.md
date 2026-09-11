@@ -31,6 +31,19 @@
 
 ---
 
+## 2026-09-11（Issue #627 PR-2）Layer 1 レビューの計測・学習ループ — JSONL 記録・週次集計・AI 指摘判定の置換
+
+**変更内容**:
+- `code-review` に Step 3-C を追加: レビュー 1 回ごと（PR 前 / PR 後の各ラウンド・指摘ゼロでも）に `tools/record_layer1_findings.py` で `content/analytics/review/layer1_findings.jsonl` に 1 行追記し、同じ PR にコミットする（GitHub API 不要・クラウドでも成立）
+- `tools/layer1_findings_report.py` を新設: ISO 週ごとの指摘ゼロ PR 率・CONFIRMED / PR（中央値）・severity / 観点別・PR 前レビューの修正数と、「同種指摘 2 回以上」（2 PR 以上で同カテゴリ）の候補を出す。`workflow-health-check` の週次ゲートに 4-e として組み込み、週次レポートに「Layer 1 計測」表を追加
+- `tools/analyze_pr_review_comments.py` / `tools/pr_review_trends.py` の AI 指摘判定を、廃止済みの Gemini / Copilot のログイン名から Layer 1 セルフレビューのテンプレート本文（`**🔴 CRITICAL** ・ **CONFIRMED**`）へ置換。過去分析には `--legacy-reviewers`。severity は Layer 1 の critical / warning / nit
+- `.gitignore` で `content/analytics/review/` を再包含（`content/analytics/*` の ignore から除外）。`scripts/publish-snapshot.sh` の配布対象に `REVIEW.md` を追加（PR-1 で `apply-to-repo.sh` の保護対象にしたが配布物に含まれていなかった）
+
+**下流で必要な手動手順**:
+1. `.gitignore` に `!content/analytics/review/` が無ければ追加し、`content/analytics/review/README.md` を配置する（`apply-to-repo.sh` は `.gitignore` を上書きしないため）。JSONL は `code-review` が初回実行時に作る
+2. 週次ゲート（`workflow-health-check` 完全版）で `python3 tools/layer1_findings_report.py --weeks 4` を実行し、同種指摘候補をチェックシート / 機械チェックへ反映する運用を組み込む
+3. Gemini / Copilot 時代のレビューコメントを含めて `analyze_pr_review_comments.py` を再分析するときは `--legacy-reviewers` を付ける（既定では Layer 1 の指摘だけを数える）
+
 ## 2026-09-11（Issue #627）PR 前フレッシュ文脈レビューと REVIEW.md 較正の導入 — レビュー順序・記録先・Layer 0 の変更
 
 **変更内容**:
