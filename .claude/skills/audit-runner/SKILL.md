@@ -209,6 +209,8 @@ Issue 本文には必ず **監査プロトコルの URL と実行日**、およ�
 1. **Routine（クラウド・推奨）**: `mcp__Claude_Code_Remote__create_trigger` で
    `create_new_session_on_fire=true` の Routine を作り、プロンプトに
    「`audit-runner` スキルで監査プロトコルを実行し、議論 → 対応 → 再監査まで完遂する」と書く。
+   `permission_mode="auto"` を明示する（未指定時の継承先は API から断定できないため。
+   `bypassPermissions` / `dontAsk` は不採用・詳細は `docs/rules/lessons/permissions.md` L-129/L-130）。
    cron は **UTC 指定**（JST から 9 時間引く・`docs/rules/datetime-rules.md`）。
    推奨頻度は **月次**（プロトコルの更新頻度と、1 サイクルのコストに見合う間隔）。
 2. **既存ルーティンのスロットに追加**: プロジェクトの運用メモ（本ベースには含まれない

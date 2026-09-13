@@ -24,16 +24,8 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF_REVIEW="$REPO_ROOT/tools/self_review_check.py"
 [ -f "$SELF_REVIEW" ] || { echo "FATAL: チェッカーが見つかりません: $SELF_REVIEW"; exit 1; }
-
-PASS=0
-FAIL=0
-report() { # report <結果 ok|ng> <説明>
-  if [ "$1" = "ok" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $2"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $2"
-  fi
-}
+# shellcheck source=tools/lib/test_harness.sh
+source "$REPO_ROOT/tools/lib/test_harness.sh"
 
 # テスト用リポジトリ（作業ブランチ + push 先の bare リモート）を作る。origin はローカル
 # bare のパスのまま使う（ネットワークに触れない）。changed_files() の主経路
@@ -43,15 +35,7 @@ report() { # report <結果 ok|ng> <説明>
 # するため、origin/HEAD の設定は不要）。
 setup_repo() {
   WORK=$(mktemp -d)
-  git init --quiet --initial-branch=main "$WORK/remote.git" --bare 2>/dev/null \
-    || git init --quiet --bare "$WORK/remote.git"
-  git init --quiet --initial-branch=main "$WORK/repo" 2>/dev/null || {
-    git init --quiet "$WORK/repo"
-    git -C "$WORK/repo" checkout --quiet -B main
-  }
-  git -C "$WORK/repo" config user.email test@example.com
-  git -C "$WORK/repo" config user.name test
-  git -C "$WORK/repo" remote add origin "$WORK/remote.git"
+  init_tmp_git_repo "$WORK"
   echo "base" > "$WORK/repo/base.txt"
   git -C "$WORK/repo" add -A
   git -C "$WORK/repo" commit --quiet -m base
@@ -63,7 +47,7 @@ setup_repo() {
     || { echo "FATAL: setup_repo で origin/main を解決できませんでした"; exit 1; }
 }
 
-teardown_repo() { rm -rf "$WORK"; }
+teardown_repo() { teardown_tmp_repo "$WORK"; }
 
 # write_failing_companion_fixture: tools/foo.py と常に失敗する tools/test_foo.sh を置く（ケース 1 / 3 共用）
 write_failing_companion_fixture() {
@@ -272,6 +256,46 @@ printf '%s\n' "$_gate_out" | grep -q '^FRESH 0$' \
   && report ok "起点が現在なら予算内としてコマンドを実行する（起点を読んでいる裏付け）" \
   || report ng "起点を現在に戻しても実行されない（出力: ${_gate_out}）"
 
+echo "[ケース 8] PR 本文チェック（Issue #628）: 本文未定時の無条件フォールバックと Session-Id/検証証跡チェックの集約"
+setup_repo
+git -C "$WORK/repo" checkout --quiet -b feat/pr-body-check main
+echo "fixture" > "$WORK/repo/note.txt"
+git -C "$WORK/repo" add -A
+git -C "$WORK/repo" commit --quiet -m "add fixture for PR body check"
+
+run_review feat/pr-body-check
+printf '%s' "$REVIEW_OUT" | grep -q 'スプリントメタを PR 本文に記載してください' \
+  && report ok "SELF_REVIEW_PR_BODY 未設定時は無条件スプリントメタ・リマインドへフォールバックする" \
+  || report ng "フォールバック・リマインドが出ない（出力: ${REVIEW_OUT}）"
+
+run_review feat/pr-body-check "SELF_REVIEW_PR_BODY=Fixes a bug."
+printf '%s' "$REVIEW_OUT" | grep -q 'PR 本文に Session-Id: が無い' \
+  && report ok "本文あり（Session-Id 欠落）を検出する" \
+  || report ng "Session-Id 欠落の Warning が無い（出力: ${REVIEW_OUT}）"
+printf '%s' "$REVIEW_OUT" | grep -q '検証証跡なし' \
+  && report ok "本文あり（検証証跡なし）を検出する" \
+  || report ng "検証証跡なしの Warning が無い（出力: ${REVIEW_OUT}）"
+printf '%s' "$REVIEW_OUT" | grep -q 'スプリントメタを PR 本文に記載してください' \
+  && report ng "本文ありなのに無条件フォールバックまで二重に出てしまう（出力: ${REVIEW_OUT}）" \
+  || report ok "本文ありでは無条件フォールバックに置き換わり二重に出ない"
+
+PR_BODY_GOOD='Session-Id: sess-good-0001
+
+## テスト・確認内容
+
+```
+python3 tools/x.py
+```
+
+PR 前レビュー: 検出 0 件'
+run_review feat/pr-body-check "SELF_REVIEW_PR_BODY=${PR_BODY_GOOD}"
+printf '%s' "$REVIEW_OUT" | grep -q 'PR 本文に Session-Id: が無い' \
+  && report ng "値を記載した Session-Id が欠落と誤判定された（出力: ${REVIEW_OUT}）" \
+  || report ok "値を記載した Session-Id は欠落と判定されない"
+printf '%s' "$REVIEW_OUT" | grep -q '検証証跡なし' \
+  && report ng "コマンド＋結果を含む証跡が検出されなかった（出力: ${REVIEW_OUT}）" \
+  || report ok "コマンド＋結果を含む証跡は検出なしと判定されない"
+teardown_repo
 
 echo
 echo "結果: PASS=${PASS} FAIL=${FAIL}"

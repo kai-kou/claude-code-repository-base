@@ -24,16 +24,8 @@ LIB="$REPO_ROOT/.claude/hooks/lib/hook_layer1_common.sh"
 [ -f "$LIB" ] || { echo "FATAL: 共通ライブラリが見つかりません: $LIB"; exit 1; }
 # shellcheck source=.claude/hooks/lib/hook_layer1_common.sh
 source "$LIB"
-
-PASS=0
-FAIL=0
-report() { # report <結果 ok|ng> <説明>
-  if [ "$1" = "ok" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $2"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $2"
-  fi
-}
+# shellcheck source=tools/lib/test_harness.sh
+source "$REPO_ROOT/tools/lib/test_harness.sh"
 
 BRANCH="feat/test"
 
@@ -43,15 +35,7 @@ BRANCH="feat/test"
 # で同じ値を計算し、tool_input.owner/repo にそのまま使う（owner/repo チェックを本物と揃える）。
 setup_repo() {
   WORK=$(mktemp -d)
-  git init --quiet --initial-branch=main "$WORK/remote.git" --bare 2>/dev/null \
-    || git init --quiet --bare "$WORK/remote.git"
-  git init --quiet --initial-branch=main "$WORK/repo" 2>/dev/null || {
-    git init --quiet "$WORK/repo"
-    git -C "$WORK/repo" checkout --quiet -B main
-  }
-  git -C "$WORK/repo" config user.email test@example.com
-  git -C "$WORK/repo" config user.name test
-  git -C "$WORK/repo" remote add origin "$WORK/remote.git"
+  init_tmp_git_repo "$WORK"
   echo "base" > "$WORK/repo/base.txt"
   git -C "$WORK/repo" add -A
   git -C "$WORK/repo" commit --quiet -m "base"
@@ -66,7 +50,7 @@ setup_repo() {
   REAL_REPO="${REAL_SLUG##*/}"
 }
 
-teardown_repo() { rm -rf "$WORK" "$MARKER_DIR"; }
+teardown_repo() { teardown_tmp_repo "$WORK" "$MARKER_DIR"; }
 
 # run_check <session_id> [stop_hook_active(true|false)] → CHECK_EXIT / CHECK_ERR に結果を残す
 # GITHUB_REPOSITORY はテスト側で固定のダミー値を渡す。stop-pr-check.sh は GITHUB_REPOSITORY が

@@ -27,6 +27,8 @@
 #  12. 本文抽出の外側 timeout（10 秒）が発火して exit=124 になっても、フックは `set -e` で異常終了せず
 #      exit 0 のまま Layer 1 リマインダー等の additionalContext を出力する（本文なし扱い・Warning なし・
 #      #627 Layer 1 再レビュー指摘）
+#  13. PR 本文を self_review_check.py に渡す一時ファイル（claude-prbody.*）が、フック正常終了後に
+#      残留しない（trap EXIT による削除・#628 Layer 1 テスト・検証指摘）
 #
 # has_code / high_risk の判定対象は一時リポジトリの git 差分そのもの（tools/detect_pr_diff_type.py
 # を base コミットへ同梱して一時リポジトリ内でも実行できるようにし、フィクスチャファイルの追加で
@@ -40,43 +42,32 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/pre-pr-create-check.sh"
 DETECT_TOOL="$REPO_ROOT/tools/detect_pr_diff_type.py"
+SELF_REVIEW_TOOL="$REPO_ROOT/tools/self_review_check.py"
 [ -f "$HOOK" ] || { echo "FATAL: フックが見つかりません: $HOOK"; exit 1; }
 [ -f "$DETECT_TOOL" ] || { echo "FATAL: detect_pr_diff_type.py が見つかりません: $DETECT_TOOL"; exit 1; }
-
-PASS=0
-FAIL=0
-report() { # report <結果 ok|ng> <説明>
-  if [ "$1" = "ok" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $2"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $2"
-  fi
-}
+[ -f "$SELF_REVIEW_TOOL" ] || { echo "FATAL: self_review_check.py が見つかりません: $SELF_REVIEW_TOOL"; exit 1; }
+# shellcheck source=tools/lib/test_harness.sh
+source "$REPO_ROOT/tools/lib/test_harness.sh"
 
 BRANCH="feat/test-pr-body-check"
 
 # setup_repo [extra_path] [extra_content]
 # origin（bare）+ clean・push 済みの作業ブランチを持つ一時リポジトリを作る。
-# tools/detect_pr_diff_type.py は base コミット（main・origin と共有する祖先）に同梱するため、
-# 一時リポジトリ内でも Layer 0 の has_code/high_risk 判定が実行できる（base に含めることで
-# 判定対象の diff 自体には現れない）。extra_path/extra_content を渡すと base の後に追加コミットとして
-# 作業ブランチへ push し、has_code/high_risk 判定をフィクスチャごとに作り分ける
-# （例: .py を追加すれば has_code=true、.claude/settings.json 相当パスなら high_risk=true）。
+# tools/detect_pr_diff_type.py と tools/self_review_check.py は base コミット（main・origin と
+# 共有する祖先）に同梱するため、一時リポジトリ内でも Layer 0 の has_code/high_risk 判定、および
+# PR 本文チェック（Session-Id 等・Issue #628 で self_review_check.py に集約済み）が実行できる
+# （base に含めることで判定対象の diff 自体には現れない）。extra_path/extra_content を渡すと
+# base の後に追加コミットとして作業ブランチへ push し、has_code/high_risk 判定をフィクスチャ
+# ごとに作り分ける（例: .py を追加すれば has_code=true、.claude/settings.json 相当パスなら
+# high_risk=true）。
 setup_repo() {
   local extra_path="${1:-}" extra_content="${2:-}"
   WORK=$(mktemp -d)
-  git init --quiet --initial-branch=main "$WORK/remote.git" --bare 2>/dev/null \
-    || git init --quiet --bare "$WORK/remote.git"
-  git init --quiet --initial-branch=main "$WORK/repo" 2>/dev/null || {
-    git init --quiet "$WORK/repo"
-    git -C "$WORK/repo" checkout --quiet -B main
-  }
-  git -C "$WORK/repo" config user.email test@example.com
-  git -C "$WORK/repo" config user.name test
-  git -C "$WORK/repo" remote add origin "$WORK/remote.git"
+  init_tmp_git_repo "$WORK"
 
   mkdir -p "$WORK/repo/tools"
   cp "$DETECT_TOOL" "$WORK/repo/tools/detect_pr_diff_type.py"
+  cp "$SELF_REVIEW_TOOL" "$WORK/repo/tools/self_review_check.py"
   echo "base" > "$WORK/repo/base.txt"
   git -C "$WORK/repo" add -A
   git -C "$WORK/repo" commit --quiet -m "base"
@@ -94,7 +85,7 @@ setup_repo() {
   git -C "$WORK/repo" fetch --quiet origin "+${BRANCH}:refs/remotes/origin/${BRANCH}" 2>/dev/null || true
 }
 
-teardown_repo() { rm -rf "$WORK"; }
+teardown_repo() { teardown_tmp_repo "$WORK"; }
 
 # run_hook <stdin json>: pre-pr-create-check.sh を作業ブランチ上で起動し
 # HOOK_EXIT / HOOK_STDOUT / HOOK_STDERR に結果を残す。
@@ -431,6 +422,16 @@ EOS
 else
   report ok "timeout 未導入のためスキップ（導入済み環境で検証される）"
 fi
+
+echo "[ケース 13] PR 本文を渡す一時ファイル（claude-prbody.*）がフック終了後に残留しない（Issue #628 Layer 1 テスト・検証指摘）"
+setup_repo
+_tmp_before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'claude-prbody.*' 2>/dev/null | sort)
+run_hook "$(mcp_json "$GOOD_BODY")"
+_tmp_after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'claude-prbody.*' 2>/dev/null | sort)
+[ "$_tmp_before" = "$_tmp_after" ] \
+  && report ok "trap による一時ファイル削除が機能し、残留ファイルが増えない" \
+  || report ng "一時ファイルが残留した（前: [${_tmp_before}] 後: [${_tmp_after}]）"
+teardown_repo
 
 echo
 echo "結果: PASS=${PASS} FAIL=${FAIL}"

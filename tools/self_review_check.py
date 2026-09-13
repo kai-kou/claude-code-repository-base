@@ -21,7 +21,9 @@ Error 検出時（exit 1）に PR 作成をブロックする「Lv3 ハードコ
 終了コード: 0=合格 or Warning のみ / 1=Error あり（ブロック） / 2=チェッカー異常
 """
 from __future__ import annotations
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -551,6 +553,161 @@ def self_test_errors(files: list[str]) -> list[str]:
     return errs
 
 
+# PR 本文チェック（Issue #628）: Session-Id / 検証証跡 / PR 前レビュー記録 / エッジケース表の
+# 4 チェックをここに集約する（旧 pre-pr-create-check.sh の awk/grep 実装を移植）。フックは
+# PR 本文の抽出だけを担い、SELF_REVIEW_PR_BODY 環境変数で本文を渡す。本文が渡されない
+# （ローカルの PR 作成前チェック等、PR 本文がまだ確定していない）ときは、従来の無条件
+# スプリントメタ・リマインドにフォールバックする。
+
+_SESSION_ID_RE = re.compile(r"Session-Id:\s*`?[0-9A-Za-z][0-9A-Za-z_-]{7,}")
+_TEST_SECTION_HEADING_RE = re.compile(r"^#+\s*テスト・確認内容")
+_GENERIC_HEADING_RE = re.compile(r"^#+\s")
+_EVIDENCE_RE = re.compile(
+    r"^\s*([-*]\s+(\[[ x]\]\s+)?)?`?(python3|bash|sh|pytest|npm|node|git|make)\s.*"
+    r"(→|->|=>|PASS|FAIL|OK|exit|passed|failed|結果|件)"
+    r"|^\s*\$\s"
+    r"|^\s*```"
+)
+_PRE_REVIEW_RE = re.compile(r"PR 前レビュー:\s*(検出 [0-9]+ 件|スキップ（.+）)")
+_EDGE_HEADING_RE = re.compile(r"^#+\s.*エッジケース")
+_EDGE_SEP_RE = re.compile(r"^\s*\|[\s:|-]*$")
+_EDGE_PLACEHOLDER_RE = re.compile(r"^\{.*\}$")
+
+
+def _extract_section(text: str, start_re: "re.Pattern[str]") -> str:
+    """start_re にマッチする見出し配下（次の見出しまで）の本文を抜き出す（awk 実装の移植）。"""
+    out: list[str] = []
+    flag = False
+    for line in text.splitlines():
+        if start_re.match(line):
+            flag = True
+            continue
+        if _GENERIC_HEADING_RE.match(line):
+            flag = False
+            continue
+        if flag:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _edge_case_row_count(pr_body: str) -> int:
+    """「エッジケース」見出し配下の表の実データ行数（プレースホルダ行・区切り行を除く）を返す。"""
+    n = 0
+    for line in _extract_section(pr_body, _EDGE_HEADING_RE).splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        if _EDGE_SEP_RE.match(line):
+            continue
+        real = False
+        for cell in line.split("|"):
+            cell = cell.strip()
+            if cell and not _EDGE_PLACEHOLDER_RE.match(cell):
+                real = True
+                break
+        if real:
+            n += 1
+    return n
+
+
+def _line_search(regex: "re.Pattern[str]", text: str) -> bool:
+    """regex が text のいずれかの行に単独でマッチするかを返す（grep -qE と同じ行単位の挙動）。
+
+    `regex.search(text)` を複数行テキストへ直接使うと、`\\s` が改行も含むため
+    「Session-Id:」と無関係な後続行の文字列を同一マッチとして誤認識する
+    （bash の grep は行単位処理のため発生しない・Layer 1 正確性指摘）。
+    """
+    return any(regex.search(line) for line in text.splitlines())
+
+
+def _run_detect_pr_diff_type() -> tuple[bool, bool]:
+    """tools/detect_pr_diff_type.py を実行し (has_code, high_risk) を返す（失敗時は False, False）。
+
+    探索先は cwd（消費先プロジェクトの repo_root）ではなく、自分自身（self_review_check.py）と
+    同じディレクトリに固定する。旧 pre-pr-create-check.sh 実装は CLAUDE_PLUGIN_ROOT 優先の
+    scripts_root 基準で探索しており（#539・tools/ を持たない第三者プロジェクトでの無効化防止）、
+    cwd 相対に戻すと同じ退行が起きる（Layer 1 指摘）。
+    """
+    tool = Path(__file__).resolve().parent / "detect_pr_diff_type.py"
+    if not tool.is_file():
+        return False, False
+    try:
+        proc = sh([sys.executable, str(tool)], timeout=20)
+    except Exception:  # noqa: BLE001
+        return False, False
+    if proc.returncode != 0:
+        return False, False
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except Exception:  # noqa: BLE001
+        return False, False
+    return bool(data.get("has_code")), bool(data.get("high_risk"))
+
+
+def _read_pr_body() -> str:
+    """PR 本文を取得する。SELF_REVIEW_PR_BODY_FILE（本番経路）を優先し、無ければ
+    SELF_REVIEW_PR_BODY（直接値・テスト用）を見る。
+
+    フック側は本文をファイル経由で渡す（Issue #628 Layer 1 セキュリティ指摘）: execve(2) は
+    単一の引数/環境変数文字列に MAX_ARG_STRLEN（既定 128KiB）の上限があり、本文を直接
+    環境変数の値として渡すとこれを超えて E2BIG で起動自体が失敗しうる（その失敗は既存の
+    fail-open 分岐に落ちて無警告で素通りする）。ファイルサイズはこの上限を受けない。
+    """
+    body_file = os.environ.get("SELF_REVIEW_PR_BODY_FILE", "").strip()
+    if body_file:
+        try:
+            return Path(body_file).read_text(encoding="utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            return ""
+    return os.environ.get("SELF_REVIEW_PR_BODY", "")
+
+
+def pr_body_reminders(files: list[str]) -> list[str]:
+    """PR 本文チェック（非ブロッキング・Issue #628）。
+
+    PR 本文が渡されていれば、Session-Id / 検証証跡 / PR 前レビュー記録 /
+    （high_risk 時の）エッジケース表の 4 点を検査する。渡されていなければ（本文未確定の PR 作成前
+    チェック等）、従来の無条件スプリントメタ・リマインドにフォールバックする。
+    """
+    pr_body = _read_pr_body()
+    if not pr_body:
+        if not files:
+            return []
+        br = sh(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        cur = br.stdout.strip() if br.returncode == 0 else ""
+        if cur in ("", "main", "master", "HEAD"):
+            return []
+        sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        sid_hint = f"Session-Id: {sid}" if sid else "Session-Id: $CLAUDE_CODE_SESSION_ID を PR 本文へ"
+        return [
+            "スプリントメタを PR 本文に記載してください（session-sprint-rules.md §2/§5）: "
+            f"{sid_hint} ＋ sp:N ラベル（project-mission.md 工程別標準値 + Dynamic 補正）"
+        ]
+
+    warnings: list[str] = []
+    if not _line_search(_SESSION_ID_RE, pr_body):
+        warnings.append(
+            "PR 本文に Session-Id: が無い（値未記入のテンプレートを含む・session-sprint-rules.md §2）"
+        )
+
+    test_section = _extract_section(pr_body, _TEST_SECTION_HEADING_RE)
+    if not _line_search(_EVIDENCE_RE, test_section):
+        warnings.append(
+            "検証証跡なし: 「テスト・確認内容」に実行したコマンドと結果を書く（best-practices: show evidence）"
+        )
+
+    has_code, high_risk = _run_detect_pr_diff_type()
+    if (has_code or high_risk) and not _line_search(_PRE_REVIEW_RE, pr_body):
+        warnings.append(
+            "PR 前フレッシュ文脈レビューの記録が無い（未記入のテンプレートを含む・self-reviewer Step 3.5・#627）"
+        )
+    if high_risk and _edge_case_row_count(pr_body) < 2:
+        warnings.append(
+            "高リスク差分（hooks / settings / permissions 等）なのにエッジケース表が無い"
+            "（`## エッジケース…` 見出し配下に見出し行 + データ行 1 行以上・#627 対策 D）"
+        )
+    return warnings
+
+
 def main() -> int:
     if not Path(".git").exists() and sh(["git", "rev-parse", "--git-dir"]).returncode != 0:
         return 2
@@ -704,19 +861,10 @@ def main() -> int:
                 if s and ".py:" in s and not s.lower().startswith(("found", "warning:", "error:")):
                     warnings.append(f"ruff(S): {s}")
 
-    # スプリントメタのリマインド（session-sprint-rules.md §2/§5・#45・非ブロッキング）
-    # PR の Session-Id / sp:N 記載漏れを未然に防ぐ（done_sp・セッション別ベロシティ計測のため）。
-    # PR 本文・ラベルはこの時点で未確定のため Error にはせず Warning に留める（PR template と二重防御）。
-    if files:
-        br = sh(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        cur = br.stdout.strip() if br.returncode == 0 else ""
-        if cur not in ("", "main", "master", "HEAD"):
-            sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
-            sid_hint = f"Session-Id: {sid}" if sid else "Session-Id: $CLAUDE_CODE_SESSION_ID を PR 本文へ"
-            warnings.append(
-                "スプリントメタを PR 本文に記載してください（session-sprint-rules.md §2/§5）: "
-                f"{sid_hint} ＋ sp:N ラベル（project-mission.md 工程別標準値 + Dynamic 補正）"
-            )
+    # PR 本文チェック / スプリントメタのリマインド（session-sprint-rules.md §2/§5・Issue #628）
+    # PR の Session-Id / 検証証跡等の記載漏れを未然に防ぐ（done_sp・セッション別ベロシティ計測のため）。
+    # 本文が未確定（ローカルの PR 作成前チェック等）のときは無条件リマインドにフォールバックする。
+    warnings.extend(pr_body_reminders(files))
 
     if warnings:
         print("[self-review] Warning:")

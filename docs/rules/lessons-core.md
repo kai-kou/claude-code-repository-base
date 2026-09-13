@@ -11,7 +11,7 @@
 | 症状 | 参照先 |
 |------|--------|
 | `git push` だけが 403/413/502・`gh` が 403・`E2BIG` で Bash 全停止・tool call parse error・スコープ外リポジトリへの clone が 403 | `docs/rules/lessons/cloud-environment.md`（L-079/L-080/L-101/L-106/L-114/L-117） |
-| サブエージェント / Agent Teams の回答が空・期待外の形式で返る・フックが偽の観測を注入する | `docs/rules/lessons/agent-delegation.md`（L-121/L-122） |
+| サブエージェント / Agent Teams の回答が空・期待外の形式で返る・フックが偽の観測を注入する・完了待ちで通知確認を繰り返す | `docs/rules/lessons/agent-delegation.md`（L-121/L-122/L-132） |
 | これまで `Skill` ツールで呼べていたビルトイン機能が `disable-model-invocation` で失敗する（起動経路の移動） | `docs/rules/lessons/skill-routing.md`（L-123）・`native-fallback-rules.md` §2.5 |
 | auto モードなのに Bash の `grep` 系コマンドで承認プロンプトが出る・自動モードで権限プロンプトが増えた | `docs/rules/lessons/permissions.md`（L-127） |
 | 無人ルーティンが承認プロンプトのまま停止している・作業ツリー外や `.claude/` `.git/` への書き込みがフックにブロックされた・MCP ツールの承認に「常に許可」が無い | `docs/rules/lessons/permissions.md`（L-129 / L-130） |
