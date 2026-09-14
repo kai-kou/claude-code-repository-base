@@ -55,6 +55,8 @@ python3 tools/check_pending_pr_reviews.py --mine --actionable-only --json   # �
 python3 tools/check_pending_pr_reviews.py --actionable-only --json          # ② 他保護込みの全体ビュー（孤児 PR 救済）
 ```
 
+**失敗時（`gh` バイナリ不在・403 等で exit code 3・stdout に `GH_UNAVAILABLE:` 行）**: `mcp__github__list_pull_requests(owner, repo, state="open")` へ直接フォールバックする（#645）。ただし `--mine` / `--actionable-only` 相当の絞り込み（Session-Id 突合・アクティブセッション除外）は無いため、取得した PR は目視で状態を確認してから回収する。
+
 `needs_prompt` → Layer 1 セルフレビュー実行 → 指摘解消 → 即マージ / `needs_response` → 指摘対応（CI 失敗・人手コメント）/ `awaiting_review` → 作成セッションが実行中（待機）。**自スコープ優先（#47）・他セッション対応中 PR への不介入（CP-4・L-109）** の判定ロジック全文は `pr-review-flow.md`「セッション復帰フロー」を参照。
 
 **公開反映の回収も復帰時の責務（#449）**: `python3 tools/check_publish_drift.py --quiet` が 1（ドリフトあり）/ 2（判定不能）なら、`publish-sync` スキルで反映まで完遂する。`[publish-sync]` の open Issue は「前のセッションが反映できずに残した積み残し」なので最優先で消化してクローズする。

@@ -585,6 +585,16 @@ def _self_test() -> int:
         (True, 'rm -rf /tmp/demo-out # CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1'),
         (True, 'rm -rf /tmp/demo-out\necho x\nCLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 true'),
         (True, 'cat > docs/n.md <<EOF\nCLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 と書く\nEOF\nrm -rf /tmp/demo-out'),
+        # --- publish-sync のマーカー削除（Issue #650） ---
+        # 修正前: マーカーが $CHECKOUT の兄弟パスにあり、Step 4 が $CHECKOUT へ cd した後の
+        # 削除は cwd（$CHECKOUT）の外への書き込みとして本ガードにブロックされていた。
+        (True, 'cd /workspace/claude-code-repository-base && rm -f /workspace/claude-code-repository-base.publish-verified'),
+        # 修正後: マーカーを $SRC（本リポジトリ）配下の gitignore 済みパスへ移し、$CHECKOUT へは
+        # cd せず git -C で操作するため、cwd は常に $SRC のまま = マーカー削除は cwd の内側で通る。
+        # SKILL.md は相対パス（`content/pipeline-state/.publish-verified`）で参照する（絶対パスの
+        # ハードコード重複を避けるため・#657 セルフレビュー指摘）。
+        (False, 'rm -f /home/user/demo-repo/content/pipeline-state/.publish-verified'),
+        (False, 'MARKER="content/pipeline-state/.publish-verified"\ntest -f "$MARKER" || exit 1\nrm -f "$MARKER"'),
     ]
     failures = 0
     for expect_block, command in cases:

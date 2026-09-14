@@ -189,7 +189,19 @@ def run_gh(args: list[str], critical: bool = False) -> str:
     部分的な情報欠落として空リストにフォールバックしてよい。
     """
     cmd = ["gh"] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError as e:
+        # gh バイナリ自体が $PATH に存在しない場合（.claude/bin/gh シムが $PATH に
+        # 含まれていない実行環境等・#645）。returncode != 0 と同様に扱い、
+        # critical=True なら GhUnavailableError として呼び出し元（get_open_prs 等）に
+        # 伝播させ、未捕捉例外でのクラッシュを防ぐ。
+        stderr_msg = f"gh バイナリが見つかりません: {e}"
+        print(f"WARNING: gh command failed: {' '.join(cmd)}", file=sys.stderr)
+        print(f"  stderr: {stderr_msg}", file=sys.stderr)
+        if critical:
+            raise GhUnavailableError(stderr_msg) from e
+        return ""
     if result.returncode != 0:
         stderr_msg = result.stderr.strip()
         print(f"WARNING: gh command failed: {' '.join(cmd)}", file=sys.stderr)
