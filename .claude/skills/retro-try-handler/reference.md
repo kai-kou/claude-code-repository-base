@@ -338,6 +338,7 @@ gh issue list -R __OWNER__/__REPO__ \
 ```
 labels ∋ "status:waiting-claude"
 labels ∌ "urgency:blocker"
+title が "[Retro][ledger]" で始まらない   # 候補台帳 Issue は TTL 対象外（retrospective 側が管理）
 now_utc − updated_at > 30 日        # 内部計算のため UTC 基準（datetime-rules.md の機械処理用 UTC 例外）
 ```
 

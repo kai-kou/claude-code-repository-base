@@ -354,9 +354,12 @@ fi
 
 # --- PR レビュー待機状態チェック（セッションタイムアウト復帰・CP-4 対策）---
 # ⚠ 本スクリプトは冒頭で CLAUDE_CODE_REMOTE=true のときだけ本体を実行する。クラウドでは
-# check_pending_pr_reviews.py が依存する gh の repo 操作が egress プロキシに 403 でブロックされ
-# （L-114・Issue #133）、この経路は構造的に必ず失敗する。毎セッション「取得失敗」警告 1 行を
-# 注入するだけの無情報ノイズになるため、ランタイム試行は行わない（Issue #249）。
+# check_pending_pr_reviews.py が依存する gh 呼び出しが構造的に必ず失敗する（Issue #249）。
+# 失敗の具体的な機序はセッション種別で異なる: インタラクティブ/GitHub Issue-PR トリガーでは
+# repo スコープ REST が 403（L-114）、**scheduled trigger（R-1）では CLAUDE_ENV_FILE が未設定で
+# 上記の gh シム PATH 注入が persist せず `gh` 自体が command not found になる**
+# （2026-09-14 実測・L-133・Issue #656）。いずれの機序でも毎回確実に失敗するため、
+# 毎セッション「取得失敗」警告 1 行を注入するだけの無情報ノイズになり、ランタイム試行は行わない。
 # ready_to_merge PR の復帰回収は MCP 経由がセッションの責務（pr-review-flow-summary.md）:
 #   mcp__github__list_pull_requests で確認 → check_pending_pr_reviews.py は MCP 未対応の
 #   ローカル実行時のプリフライト用途に限定する。現状把握の 1 行ポインタは

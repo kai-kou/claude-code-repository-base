@@ -11,7 +11,7 @@
 | レーン | スキル | 担当フェーズ | 主な起動 |
 |--------|--------|------------|---------|
 | **改善 Issue レーン** | `self-improvement-loop`（発見 / 整理 / 消化の 3 モード） | 横断レビューでの課題発見・起票 → 棚卸し（集計・重複統合・Epic 化・priority/sp 補完）→ **リファインメント**（後回しにされた低優先・滞留 Issue を 4 出口へ遷移。この工程のみ **全 type 対象・`type:retro-try` は除外**）→ 実装・マージ | 発見スロット / 消化スロット / R-1 ルーティン（リファインメントは手順 9-3 の週次ゲート）/ 「セルフ改善して」「改善バックログを棚卸しして」「リファインメントして」「改善Issue消化して」 |
-| **振り返りレーン** | `retrospective` → `retro-try-handler` | ワークフロー完了・失敗時の KPT 生成と Try 起票 → Try Issue の実装・PR 化 | 各パイプラインの最終ステップ / 日次消化スロット / 「レトロスペクティブして」 |
+| **振り返りレーン** | `retrospective` → `retro-try-handler` | ワークフロー完了・失敗時の KPT 生成 → Try を候補台帳に記録し、資格判定を満たしたものだけ Issue 化（PULL 型・#662）→ Try Issue の実装・PR 化 | 各パイプラインの最終ステップ / 日次消化スロット / 「レトロスペクティブして」 |
 | **監査・衛生レーン** | `workflow-health-check`（監査ロジック本体）→ `project-sync`（衛生実行・軽量版の呼び出し側） | PR 健全性・Issue 状態の監査、Stale / Orphan / ラベル不整合の解消 | 週次ゲート（定期ルーティンに組み込む）/ 日次の衛生スロット / 「ヘルスチェックして」「project-sync して」 |
 
 `project-manager`（Issue / Milestone の個別 CRUD）・`waiting-user-handler`（`status:waiting-user` のトリアージ）・
@@ -36,8 +36,12 @@
 > **ルール 5 が `type:retro-try` を除外する理由（将来の変更者へ）**: ルール 2（`type:retro-try` は振り返りレーンの専管）は
 > #160 でレーン間の奪い合いを防ぐために決着した条項である。リファインメントの対象を type 非依存に広げる際も
 > この除外だけは維持すること（除外を外すと #160 の決定を壊す）。
-> **retro-try 自身の出口**: 4 出口の代わりに、振り返りレーン内の `retro-try-handler` Step 1.5（TTL 自動クローズ・`not_planned`）が
-> 「実装する」以外の退出経路を持つ（#563。数値の SSOT は `retrospective-rules.md`「WIP 制御」）。レーンをまたがず #160 を維持する設計。
+> **retro-try 自身の出口**: TTL 自動クローズ（バックストップ）に加え、#662 で振り返りレーンは PULL 型に転換した。Try は既定で
+> 候補台帳 Issue（`[Retro][ledger]`・`type:retro-try`）に記録され、資格判定を満たしたものだけ Issue 化される
+> （SSOT: `retrospective-rules.md`「WIP 制御」）。台帳は振り返りレーン内部の中間状態であり、改善 Issue レーン・
+> 監査レーンは読み書きしない（監査レーンは存在・重複の報告のみ）。4 出口の代わりに、振り返りレーン内の
+> `retro-try-handler` Step 1.5（TTL 自動クローズ・`not_planned`）が「実装する」以外の退出経路を持つ（#563。
+> 数値の SSOT は `retrospective-rules.md`「WIP 制御」）。レーンをまたがず #160 を維持する設計。
 
 ## 3. レーン間の受け渡し
 

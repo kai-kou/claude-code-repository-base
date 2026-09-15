@@ -13,6 +13,7 @@
 | `E2BIG: argument list too long` で全 Bash が停止 | L-106 |
 | `gh` が 403 を返す（`[gh-shim]` ガイダンスが出る） | L-114 |
 | スコープ外リポジトリへの `git clone` / `ls-remote` が 403、`add_repo` が無い | L-117 |
+| scheduled trigger セッションで `gh`（シム含む）が `FileNotFoundError`（command not found） | L-133 |
 
 ---
 
@@ -154,6 +155,43 @@ GitHub Issue/PR からの自動トリガー型タスクにも scheduled trigger 
   （読み取り可否だけで書き込み可否を推定しない）。
 - 恒久的な複数リポジトリアクセスの公式機能がリリースされたら、本エントリとクロスリポ参照系スキルの
   前提を更新する（CP-2）。
+
+---
+
+## L-133: scheduled trigger セッションでは `CLAUDE_ENV_FILE` が未設定で、gh シムの PATH 注入が persist しない（2026-09-14・#656）
+
+**症状**: R-1（4 時間ごとの scheduled trigger）セッションで `check_pending_pr_reviews.py` を実行すると、
+`session-start.sh` が `[gh-shim] enabled` を出力したにもかかわらず、後続の Bash 呼び出しで
+`gh` が **`FileNotFoundError`（command not found）** になる（`gh api user` の 403 ではなく、
+シェルが `gh` というコマンド自体を見つけられない）。
+
+**根本原因（2026-09-14 実機確認・R-1 自身のセッションで検証）**:
+- `session-start.sh` は `.claude/bin`（gh シム）を **フック実行中のプロセス内でのみ** `PATH` に
+  `export` する。後続の Bash tool 呼び出しへ persist させる手段は `env_persist()`（`CLAUDE_ENV_FILE`
+  への追記）のみで、`CLAUDE_ENV_FILE` が未設定なら `env_persist()` は無条件で no-op になる
+  （`session-start.sh:46-51`）。
+- 実機確認: R-1 セッションでは `CLAUDE_ENV_FILE` が **未設定**（`echo ${CLAUDE_ENV_FILE:-<unset>}` →
+  `<unset>`）。つまり `.claude/bin` の PATH 注入はフック終了と同時に失われ、以後どの Bash 呼び出しでも
+  `gh`（シムを含む）が PATH 上に存在しない。
+- これは `docs/rules/github-mcp-fallback-patterns.md` §1.5 が前提としている
+  「SessionStart フックが `.claude/bin` を PATH 先頭に注入する」が **`CLAUDE_ENV_FILE` 提供時のみ
+  成立する条件付きの事実** であることを意味する。scheduled trigger セッションはその条件を満たさない。
+- **L-114（gh api user は 200・repo REST が 403）とは別の障害モード**: L-114 は「gh 実体には到達できるが
+  API 権限で弾かれる」ケース、本エントリは「gh 実体（シム含む）に **到達すらできない**」ケース。
+  両方とも「クラウドでは gh を当てにしない」という結論は同じだが、エラーメッセージの切り分け
+  （`command not found` vs `403`）を混同すると誤診断する。
+
+**対策**:
+- scheduled trigger セッションから `gh`（シム含む）に依存するスクリプト・手順を呼ぶ前提を置かない。
+  `mcp__github__*` を直接の一次経路にする（`session-start.sh` の既存方針・Issue #249 と同じ結論）。
+  `check_pending_pr_reviews.py` 等 gh 依存スクリプトは「失敗したらフォールバック」ではなく
+  「scheduled trigger では最初から呼ばない」設計に倒す方が無駄な subprocess 起動を避けられる。
+- `CLAUDE_ENV_FILE` に依存しない PATH persist 方式（例: `~/.bashrc` 先頭への source 行追記。
+  `session-start.sh:184-194` が GitHub リポジトリ変数（`gh_vars.py` 由来）の伝搬で既に使っている手法）
+  への一般化は、本エントリでは行わない（scheduled trigger 全体への影響範囲が広く、検証を要する
+  別スコープ。follow-up Issue #658 で扱う）。
+- 本エントリの実測が古くなったら（`CLAUDE_ENV_FILE` が scheduled trigger でも供給されるようになったら）
+  `github-mcp-fallback-patterns.md` §1.5 と本エントリを同一 PR で更新する（CP-2）。
 
 ---
 

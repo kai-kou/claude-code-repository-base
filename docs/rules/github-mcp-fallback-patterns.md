@@ -112,6 +112,10 @@ GitHub API アクセス付きでセッションに attach されていないこ�
 - フック・`tools/*.py` の `subprocess` からも、PATH に `.claude/bin` が入っていればシム経由になる
   （SessionStart が `CLAUDE_ENV_FILE` に PATH を書き出す）。入っていない場合も `gh api repos/...`
   直書きなら実 gh のままで動作する。
+  > 🔴 **`CLAUDE_ENV_FILE` はセッション種別によって未設定になる**（scheduled trigger セッションで実測・
+  > L-133）。未設定だと SessionStart の PATH 注入はフック終了と同時に失われ、後続の Bash 呼び出しでは
+  > シムどころか `gh` 自体が `command not found` になる（403 ではない）。「PATH に `.claude/bin` が
+  > 入っていれば」は無条件の既定ではなく `CLAUDE_ENV_FILE` 提供時のみの条件付き事実として扱う。
 
 ## 2. コマンド別 代替パターン（gh → MCP）
 

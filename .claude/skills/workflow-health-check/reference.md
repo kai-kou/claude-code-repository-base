@@ -60,13 +60,16 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
 
 ```
 5-a: retro-try Issue 消化率チェック
-  └─ `type:retro-try` ラベルの Issue を全件取得（open + closed）
+  └─ `type:retro-try` ラベルの Issue を全件取得（open + closed）。タイトルが `[Retro][ledger]` で始まる
+     候補台帳 Issue は集計対象から除外する（台帳は「実装対象」ではなく振り返りレーンの中間状態のため）
   └─ 消化率（closed / total）を算出
   └─ 消化率 50% 未満 → Warning（Slack 通知 + 改善提案）
-  └─ オープン件数が 30 件超 → Warning（バックログ肥大化）
+  └─ 非 blocker のオープン件数（`urgency:blocker` を除く）が WIP 上限（`docs/rules/retrospective-rules.md`
+     「WIP 制御」・#662 の PULL 転換で μ_base × W_target に再定義）を **超えた**（`>`）→ Warning（バックログ肥大化。
+     PULL 型では上限ちょうどまで埋まるのが正常な定常状態なので、`≥` にすると健全運用でも常時鳴る）
 
 5-b: 重複 Issue 自動検出・統合
-  └─ `type:retro-try` のオープン Issue を全件取得
+  └─ `type:retro-try` のオープン Issue を全件取得。台帳 Issue（`[Retro][ledger]` 接頭辞）は除外する
   └─ タイトルからキーワードを抽出し、同一テーマの Issue グループを特定
      判定基準: 同じツール名・フィールド名（プロジェクト定義）、同じファイルパス、または同じ問題パターン
   └─ 3 件以上の同テーマ Issue が存在 → メイン Issue にコメント追記 + 残りを duplicate クローズ
@@ -86,23 +89,36 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
      通知例: 「⚠️ waiting-user 重複 Issue を検出しました: {ID} {フェーズ名} が 2 件 → #{N1}, #{N2}」
   └─ 1 回の実行で通知するグループは最大 5 グループまで（サーキットブレーカー）
 
-5-d: WIP ゲート適合性チェック（report-only・アクチュエータなし・#563）
-  └─ `type:retro-try` のオープン Issue を取得し、オープン件数 N と「直近 7 日以内に created_at がある件数」M を数える
-  └─ N ≥ 30（retrospective の WIP 上限・SSOT は docs/rules/retrospective-rules.md「WIP 制御」）かつ M > 3
-     → Warning: 「WIP ゲート（retrospective Step 3-0）が機能していない疑い。在庫 N 件のまま新規 Issue が週 M 件生成されている」
+5-d: WIP ゲート適合性チェック（report-only・アクチュエータなし・#563 → #662 で PULL 転換に追随）
+  └─ `type:retro-try` のオープン Issue を取得し（台帳 Issue を除外）、`urgency:blocker` を除いた
+     非 blocker オープン件数 N と「直近 7 日以内に created_at がある件数」M を数える
+  └─ N > WIP 上限（retrospective の資格判定ゲート・SSOT は docs/rules/retrospective-rules.md「WIP 制御」）
+     かつ M ≥ 1
+     → Warning: 「資格判定ゲート（retrospective Step 3）が機能していない疑い。在庫 N 件が WIP 上限を
+       超えたまま新規 Issue が週 M 件生成されている」
+     （非 blocker の昇格は「< WIP 上限」でゲートされるため、正常系では N は上限ちょうどまでしか達しない。
+      上限を超えた状態で非 blocker の新規が出るのはゲート素通りの兆候。`≥` にすると正常な満杯状態で誤警報になる）
+  └─ #662 の PULL 転換により Try の既定は台帳記録で、Issue 化は資格判定（blocker 即時 ∨ 同一キー 30 日
+     以内 2 回以上 ∧ 空きあり）を通過した昇格分に限られる。新規 Issue が発生すること自体は正常系だが、
+     それが WIP 上限に張り付いた状態と同時に起きるのはゲートが素通りしている兆候
   └─ 生成側（retrospective）の内部状態は参照しない（レーンをまたぐ暗黙状態共有を避け、GitHub 上の Issue 集合だけから独立に検査する）
   └─ 旧「生成/消化ペース比較」は廃止（ゲート本体は retrospective 側にあり、頻度調整は下流のプロジェクト定義で決まるため
      レポートしても実行者がいなかった）。TTL 出口（retro-try-handler Step 1.5）の作動状況は 5-a の消化率に反映される
 
-5-e: retro-try グローバル沈黙検出（完全版のみ・#397）
-  └─ type:retro-try の Issue を open + closed 全件取得し、最新の created_at を求める
-  └─ 最新の生成から 30 日超（該当 Issue が 1 件も無い場合はリポジトリ初回コミットから 30 日超）
-     → Warning: 「振り返りレーンが N 日間 1 件も Try を生成していない。retrospective の起動経路を確認」
+5-e: 候補台帳の存在・重複・沈黙検出（完全版のみ・#397 → #662 で PULL 転換に追随）
+  └─ `type:retro-try` かつタイトルが `[Retro][ledger]` で始まる OPEN Issue（候補台帳）を取得する
+  └─ 0 件 → Warning: 「候補台帳が存在しない（未移行 or 誤クローズ）。retrospective Step 3-0 の台帳作成を確認」
+  └─ 2 件以上 → Warning: 「候補台帳の重複: #N1, #N2（自動統合しない・report-only）」
+  └─ 1 件（正常系）→ 沈黙検出に進む: `type:retro-try`（台帳を除く）の open + closed 全件を取得し最新の
+     created_at を求め、**かつ** 台帳 Issue 自体の updated_at を確認する。両方が 30 日超のときだけ
+     Warning: 「振り返りレーンが N 日間 1 件も Try を観測していない。retrospective の起動経路を確認」
+     （PULL 転換後は Issue 新規ゼロが正常系なので `created_at` 単独では判定しない。台帳の
+     `updated_at` も 30 日超のときだけ「レトロ自体が動いていない」と確定できる）
   └─ 5-a（消化率）・5-c（パイプライン別カバレッジ）では検出できない状態を拾うための独立条件:
      5-a は closed/total の比率を見るため「全件 closed で新規ゼロ」は 100% と評価されて発火しない。
      5-c は「過去 7 日にパイプライン PR がマージされたのに retro Issue 0 件」というパイプライン単位・
      7 日窓の条件のため、総数のグローバルな沈黙は対象外（#394 の議論で実測確認）
-  └─ report-only（Issue の自動生成はしない。retrospective を代行実行もしない）
+  └─ report-only（Issue の自動生成・統合・クローズはしない。retrospective を代行実行もしない）
 
 5-f: スケジュールルーティン生存確認（heartbeat・完全版のみ・#397）
   └─ 前提: プロジェクトがスケジュールルーティンを使っている場合のみ実行する。ルーティンの
@@ -212,11 +228,11 @@ retro-try Issue の消化率・重複状況・パイプラインカバレッジ�
 | 指標 | 値 | 判定 |
 |------|-----|------|
 | retro-try 消化率 | {closed}/{total} ({N}%) | OK / Warning |
-| オープン件数 | {N}件 | OK / Warning（30件超で Warning） |
+| オープン件数（非blocker・台帳除く） | {N}件 | OK / Warning（WIP上限〔SSOT〕超過で Warning） |
 | 重複統合 | {N}グループ統合 | — |
 | パイプラインカバレッジ | 各パイプライン:{N}（プロジェクト定義） | OK / Warning（0件で Warning） |
-| WIP ゲート適合性 | オープン{N}件 / 直近7日新規{M}件 | OK / Warning（N≥30 かつ M>3 で Warning・5-d） |
-| retro-try 最新生成からの経過 | {N}日 | OK / Warning（30日超で Warning・5-e） |
+| WIP ゲート適合性 | 非blockerオープン{N}件 / 直近7日新規{M}件 | OK / Warning（N>WIP上限〔SSOT〕かつM≥1 で Warning・5-d） |
+| 候補台帳の状態 / 最新生成からの経過 | 台帳{N}件 / 最新生成{M}日・台帳更新{K}日 | OK / Warning（台帳0件or2件以上、または両方30日超で Warning・5-e） |
 | ルーティン生存（heartbeat） | {ルーティン名}: 最終発火 {N}時間前 | OK / Warning（cron 間隔の2倍超・停止・未作成で Warning・5-f） |
 
 ### 次週への改善アクション

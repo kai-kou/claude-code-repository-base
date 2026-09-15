@@ -165,26 +165,47 @@ KPT（Keep/Problem/Try）を以下の形式で出力してください。
 ## F. Step 3-A: 既存 Issue との重複チェック（OPEN → CLOSED/not_planned の 2 段）
 
 Issue 作成前に、`type:retro-try` ラベルの既存 Issue と突合し、類似する Issue がないか確認する。
-検索は **Step 3-0 で取得済みの 2 リスト**（`open_list` / `closed_list`）に対して行い、Try ごとに API を叩き直さない。
+検索は **Step 3-0 で取得済みの `open_list`**、および資格判定を満たした Try についてのみ取得する `closed_list` に対して行う。
 
-MCP（クラウド・一次経路・Step 3-0 で各 1 回だけ実行）:
+### 0. キー算出と台帳突合
+
+各 Try についてまず次のキーを算出し、台帳本文の集約表（reference.md K）と突合して観測回数を更新する:
+
 ```
-open_list   = mcp__github__list_issues(owner, repo, state="OPEN",   labels=["type:retro-try"])
+key = {pipeline}|{target}
+```
+
+- `target` はタイトル + detail から抽出した対象トークン。次を優先して機械抽出する: ファイル名
+  （`[A-Za-z_][A-Za-z0-9_./-]*\.(py|sh|md|json|yaml)`）/ ツール名 / 品質指標・フィールド名
+- 抽出できない場合は、正規化した問題対象の名詞句（**5 語以下・小文字・助詞と動詞を除く**）を `target` とする
+  （空欄キー同士の誤一致を防ぐ）
+- 照合は **キーの完全一致**。表現ゆれの意味的同一性判定はキーに含めない（過小カウント側に倒し、
+  `workflow-health-check` 5-b の名寄せがバックストップになる）
+- **観測窓の判定は `last_seen` との差分で行う**（集約表は個々の観測日時を持たないため）: 今回の観測日 − 前回の
+  `last_seen` が観測窓（数値は `retrospective-rules.md`「WIP 制御」）を **超えていれば `count` を 1 にリセット** して
+  記録し、超えていなければ `count += 1` する。これにより `count ≥ 2` は「観測窓内で連続した再観測」を意味し、
+  離れた 2 回の観測（例: 85 日ぶり）は資格判定を満たさない
+
+`closed_list` の取得（下記）は、上記の突合で **資格判定を満たした Try が最初に出た時点で 1 回だけ** 行い、同一レトロ内の以後の Try で使い回す（毎回は取得しない。1 件も満たさなければ取得しない）。
+
+MCP（クラウド・一次経路）:
+```
+open_list   = mcp__github__list_issues(owner, repo, state="OPEN",   labels=["type:retro-try"])   # Step 3-0 で取得済み
 closed_list = mcp__github__list_issues(owner, repo, state="CLOSED", labels=["type:retro-try"], since={90 日前の ISO 8601 UTC})
               # 応答に state_reason は含まれない（fields は number/title/body/state/user/labels/assignees/comments/
               # created_at/updated_at/field_values のみ）。ここでは理由で絞らず、類似ヒット時に個別確認する（下記 2）
 ```
 
-判定順:
+判定順（open_list との突合）:
 1. `open_list` に類似あり → G（既存 Issue へコメント追記）
 2. 1 で一致なし、かつ `closed_list` に類似あり → `mcp__github__issue_read(method="get", issue_number={N})` で `state_reason` を確認する
    （類似ヒット時のみの追加 1 呼び出し）:
-   - `not_planned`（TTL クローズ済み・retro-try-handler Step 1.5 由来）→ **reopen**:
+   - `not_planned`（TTL クローズ済み・retro-try-handler Step 1.5 由来、または reference.md K の移行吸収）→ **reopen**:
      `mcp__github__issue_write(method="update", issue_number={N}, state="open")`（**`labels` は渡さない**。渡さなければ全置換の
      対象にならず `status:waiting-claude` を含む元のラベルが保持される）。続けて G の再発検知テンプレートを投稿し、
-     末尾に「TTL クローズ（not_planned）から再発により reopen」の 1 行を添える。reopen は Step 3 の起票上限・WIP 上限の対象
+     末尾に「TTL クローズ（not_planned）から再発により reopen」の 1 行を添える
    - `completed`（実装済み）→ 退行として扱い、3 へ進む（新規作成。本文に「#N で実装済みの内容が再発」と記載）
-3. どちらにも一致なし → H（新規作成。ただし Step 3 の起票上限・WIP 上限の範囲内のみ）
+3. どちらにも一致なし → H（新規作成）
 
 90 日窓（`since`）は closed Issue の全件検索コストを避けるための境界（数値の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」）。
 
@@ -254,6 +275,8 @@ gh issue list -R __OWNER__/__REPO__ \
 
 ## H. Step 3-C: 新規 Issue 作成（類似なし）
 
+> 前提: 本テンプレートを使うのは **資格判定を満たした Try だけ**（`docs/rules/retrospective-rules.md`「WIP 制御」の資格判定式）。資格判定を満たさない Try は Issue を作らず台帳記録のみ（K）。
+
 類似 Issue が見つからなかった場合のみ新規 Issue を作成する。`mcp__github__issue_write`（`method: "create"`）を使用する。
 
 ```
@@ -301,6 +324,7 @@ body: （本文テンプレートに従って生成）
 - Pipeline PR: {pr_url}（あれば）
 - 推定工数: {try.estimated_effort}（small / medium / large）
 - 参考ルールファイル: {関連する docs/rules/ のファイル名}
+- 起票理由: {blocker 即時 / 観測 n 回目（初回 {日付}）+ 空き枠あり}
 
 ---
 *このIssueはレトロスペクティブスキルにより自動生成されました*
@@ -361,7 +385,7 @@ git push
 
 ## J. Try Issue 対応フロー（別ワークフロー）
 
-本スキルが作成した Try Issue は、以下のフィルタで次回実行時に取得・対応する（実際の対応は `retro-try-handler` スキルが担う）。
+本スキルが資格判定を満たして **昇格させた**（Issue 化・reopen した）Try のみが本フローの対象になる（台帳記録のみで留まっている Try は Issue ではないため対象外）。以下のフィルタで次回実行時に取得・対応する（実際の対応は `retro-try-handler` スキルが担う。`retro-try-handler` は台帳を読まず、オープン Issue の消化のみを行う）。
 
 MCP（クラウド・一次経路）:
 ```
@@ -397,3 +421,79 @@ gh issue close {number} \
   --comment "対応完了。{コミットハッシュ} で修正済み" \
   -R __OWNER__/__REPO__
 ```
+
+---
+
+## K. 候補台帳（Candidate Ledger・PULL 型・#662）
+
+> 数値（観測窓 30 日・WIP 上限 6 件・台帳保持 90 日・ローテーション 300 件）の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」。本節は運用手順のみを定義する。
+
+### 1. 台帳 Issue の仕様
+
+- **タイトル**: `[Retro][ledger] Try 候補台帳 #{通番}`（通番はローテーション時に 1 ずつ増やす。初回は `#1`）
+- **ラベル**: `type:retro-try` のみ（新ラベルは作らない。クラウドの MCP にラベル作成 API が無いため・`github-mcp-fallback-patterns.md` §2.5）。`status:*` は付けない（消化対象の作業 Issue と区別するため）
+- **本文テンプレート**（集約表。read-modify-write で更新する。**新規作成時はヘッダー行までで、データ行は空**）:
+
+```markdown
+候補台帳（PULL 型・資格判定を満たさない Try のプール）。数値の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」。
+**この Issue は消化対象の作業 Issue ではない**（実装・クローズしない。`retro-try-handler` / 自動消化ルーティンはタイトル接頭辞 `[Retro][ledger]` で除外する）。
+直接編集しないこと（`retrospective` Step 3-2 が read-modify-write で更新する）。
+
+| key | count | first_seen | last_seen | urgency | last_title | issue |
+|-----|-------|-----------|-----------|---------|-----------|-------|
+```
+
+データ行の例（**テンプレートには含めない**。記入形式の参考のみ）:
+
+```markdown
+| script\|fact_check_flags | 1 | 2026-09-14 | 2026-09-14 | quality | fact_check_flags の自動解消率をセルフレビューで検出する | |
+```
+
+`count` は観測窓内の連続観測回数（F の 0.: 前回 `last_seen` から観測窓を超えて再観測されたら 1 にリセット）。`issue` 列は昇格（Issue 化・reopen）したキーだけ昇格先 Issue 番号を記入する。
+
+### 2. コメントテンプレート（監査ログ・1 レトロ 1 本）
+
+```json
+[{"key": "script|fact_check_flags", "date": "2026-09-14", "pipeline": "script", "entity_id": "V001",
+  "title": "fact_check_flags の自動解消率をセルフレビューで検出する", "urgency": "quality", "done_type": "A-doc",
+  "priority": "medium", "estimated_effort": "small", "promoted_to": null}]
+```
+
+1 レコード = 1 Try（配列に今回の全 Try を並べる）。`promoted_to` は昇格した場合のみ Issue 番号を入れる（それ以外は `null`）。
+
+### 3. 本文更新手順（read-modify-write）
+
+Step 3-0 で読んだ本文は **資格判定用の参照** に留め、書き込みは次の手順で行う（Step 3-1 の処理時間の間に他セッションが本文を更新していても上書きしないため）:
+
+1. **書き込み直前に** `mcp__github__issue_read(method="get", issue_number={台帳番号})` で本文を **読み直す**
+2. 読み直した本文の集約表に、今回のレトロで決めた **キーごとの差分** を再適用する（Step 3-0 時点の本文に差分を当てた結果を丸ごと書かない）: 既存キーは `count` を今回の観測分だけ加算（観測窓超えのリセットは Step 3-1 の判定どおり）し `last_seen`/`last_title`/`urgency` を今回の値で更新、新規キーは行を追加、昇格したキーは `issue` 列を記入、90 日超キーは削除
+3. `mcp__github__issue_write(method="update", issue_number={台帳番号}, body={更新後の本文})` で書き戻す
+
+同時実行で失われるのは「1 と 3 の間（数秒）に別セッションが書いた 1 件の観測」だけであり、その観測はコメント（監査ログ）に残るため次回観測時に回復する（許容。台帳を排他ロックする仕組みは持たない・YAGNI）。
+
+### 4. 台帳保持・ローテーション・再構築
+
+- **保持**: 本文更新時、`last_seen` が現在から **90 日を超えた** キーは集約表から削除する（本文をトークン有界に保つ。削除された観測はコメントに残るため履歴は失われない）
+- **ローテーション**: 台帳の `comments` 数（`open_list` 応答で追加 API なしに取得可能）が **300 件以上** になったら、新しい台帳 Issue（`[Retro][ledger] Try 候補台帳 #{通番+1}`）を作成して現行の集約表本文を引き継ぎ、旧台帳に「→ #{新台帳番号}」のポインタコメントを付けて `not_planned` でクローズする。以降の Step 3-0 は `open_list` から新台帳を特定する
+- **再構築**: 本文の集約表がパース不能な場合、直近のコメント（監査ログ）を可能な範囲で走査してキー・観測回数を再構築してから書き戻す。全件走査が困難なら直近のコメントのみで再構築し、完了報告に「台帳を部分再構築した」旨を明記する
+
+### 5. 移行手順（台帳不在時に 1 回だけ・下流の初回レトロ）
+
+台帳が存在しないことは「未移行」の合図。Step 3-0 で次を **1 回だけ** 実行する:
+
+1. 台帳 Issue を新規作成する（本文は空の集約表テンプレート）
+2. 既存オープン `type:retro-try` Issue のうち `status:in-progress` と `urgency:blocker` を **除いた** ものを、更新日の新しい順に **WIP 上限の件数だけ残し**（数値は SSOT）、残りを台帳へ吸収する
+3. 吸収する各 Issue について:
+   - 台帳の集約表に 1 行追加（`count=1`・`first_seen`/`last_seen` は元 Issue の作成日・`issue` 列に `#N（吸収）` と記入して観測 1 回で記録。以後の資格判定では `issue` 列の吸収元を F の `closed_list` 突合と同様に reopen 先として使う）
+   - 対象 Issue に吸収コメントを追加:
+     ```markdown
+     候補台帳 #{台帳番号} へ吸収（PULL 転換・#662）。同一キーが再発すれば資格判定で reopen される。
+     ```
+   - **クローズ直前にラベルを再取得し**（`mcp__github__issue_read(method="get_labels")`）、`status:in-progress` が付いていたら他セッションが着手済みなのでスキップして次へ（選定からクローズまで複数ターンに分かれるため・CP-4）
+   - 対象 Issue を `not_planned` でクローズする
+
+移行直後の同一レトロでは `open_list` を再取得しない（吸収でクローズした分が OPEN のまま数えられるが、移行は WIP 上限の件数だけ残す手順なので空き枠は再取得しても 0 で、資格判定の結果は変わらない。完了報告の空き枠表示だけが保守側にずれる）。
+
+**下流のルーティン定義への追記（移行時に 1 回だけ・必須）**: 台帳は `type:retro-try` ラベルを持つオープン Issue なので、オープン Issue を type 不問で消化するルーティン（開発ベースの R-1 ルーティン定義の手順 2 相当・下流はプロジェクト定義）や独自スクリプトがあれば、「タイトルが `[Retro][ledger]` で始まる Issue は対象外」の除外を **取得直後の共有地点** に追記する（sp 補完・選出・内訳のすべてが同じ一覧を使うため）。除外を入れないと台帳が「実装」されてクローズされ、観測履歴を失う。
+
+再発すれば F の判定順（`closed_list` 突合 → `not_planned` 確認 → reopen）で自動的に扱われる。1 Issue あたり 2 API 呼び出し（コメント + クローズ）のため、対象件数が多い場合は 8 呼び出し/ターンの上限（`session-safety-rules.md` ルール 1）に合わせて中間報告を挟み複数ターンに分けてよい。既存 Issue の吸収は A-1〜A-6 に該当せず自律実行する。

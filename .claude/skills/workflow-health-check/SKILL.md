@@ -161,6 +161,7 @@ Step 3 以降を実行する。週次レポートフォーマット・実行コ�
 | Phase 移行 Issue 作成 | ✅ | 漏れ補完 |
 | retro-try Issue 作成 | ✅ | 記録のみ |
 | 重複 retro-try Issue の duplicate クローズ | ✅ | メイン Issue にコメント追記後にクローズ（Step 5-b・`reference.md`） |
+| 候補台帳 Issue（`[Retro][ledger]`）のクローズ・統合 | ❌ | `retrospective` が管理（health-check は Step 5-e で存在・重複を報告するのみ） |
 | PR クローズ | ⚠️ 条件付き | 重複 PR かつ古い方のみ。コメント投稿後 24h 経過が条件 |
 | コード変更・コミット | ❌ | セルフレビューまたはユーザーが対応 |
 | PR マージ | ❌ | pr-review-watcher が担当 |

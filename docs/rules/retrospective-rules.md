@@ -10,7 +10,7 @@ Try アイテムを GitHub Issue 化するルール。
 | 実行タイミング | 各パイプラインの最終ステップ（自動）または手動 `/retrospective` |
 | フレームワーク | KPT（Keep / Problem / Try） |
 | Agent Teams 構成 | 3 役割を並列サブエージェントで担当 |
-| Try の Issue 化 | 全 Try アイテムを自動で GitHub Issue 化 |
+| Try の記録 | 候補台帳に記録し、資格判定を満たしたものだけ GitHub Issue 化（PULL 型・#662） |
 | フィルタ用ラベル | `type:retro-try` で一覧取得可能 |
 
 ## 対象ワークフロー
@@ -204,14 +204,16 @@ gh issue list -R __OWNER__/__REPO__ --label "type:retro-try" --label "priority:h
 2. Problem を役割別にまとめる
 3. **Try を全役割から収集** し、重複・類似アイテムを統合する
 
-### Step 3: Try アイテムの Issue 化
+### Try アイテムの記録（台帳既定・Issue 化は資格判定のみ）
 
-WIP 制御（本ファイル「WIP 制御」節・#563）の範囲内で GitHub Issue を作成する:
+Try の既定は Issue ではなく **候補台帳への記録**（PULL 型・WIP 制御は本ファイル「WIP 制御」節・#563 → #662）。手順は次の PULL 型に従う:
 
-1. オープン `type:retro-try` 件数を 1 回取得し、WIP 上限（30 件）以上なら追記のみモード（新規作成なし）
-2. 優先度 `high` のアイテムから順に処理し、類似した Try は既存 Issue へのコメント追記（または TTL クローズ済み Issue の reopen）にまとめる
-3. 類似がない Try のみ `mcp__github__issue_write` で Issue を作成する（1 回のレトロで最大 3 件・`urgency:blocker` は上限外）
-4. 作成した Issue 番号と、見送った Try（起票上限 / WIP 上限）を記録する
+1. **台帳読み**: 台帳 Issue（`[Retro][ledger]` 接頭辞・`type:retro-try` ラベル）の本文（集約表）を 1 回読む。台帳が無ければ初回移行を実行する
+2. **キー算出と突合**: 各 Try のキー（定義は `retrospective` reference.md F の 0.）を算出し、既存オープン Issue に類似があれば再発コメントを追記（空き枠を消費しない）、なければ台帳の集約表と突合して観測回数を更新する
+3. **資格判定**: 「WIP 制御」節の資格判定式（`urgency:blocker` 即時 ∨ 同一キー観測窓内 2 回以上 ∧ 空き枠あり）を満たすかどうかで分岐する
+   - 満たす → TTL クローズ済み Issue の reopen / 新規作成で Issue 化し、空き枠を 1 減らす
+   - 満たさない → Issue化せず **台帳に記録するのみ**（記録が残る限り「見送り」ではなく「記録あり」として扱う）
+4. **台帳記録**: 今回処理した全 Try のキー・観測回数・昇格結果を台帳へ書き戻す（コメント追記 + 本文更新）
 
 ### Step 4: Slack 通知
 
@@ -246,6 +248,9 @@ python3 "${CLAUDE_PROJECT_DIR}/tools/slack_notify.py" pipeline \
 #### 🚀 Try（次回への改善施策）→ Issue 化済み
 {Try の一覧（Issue #N へのリンク付き）}
 
+#### 📒 台帳記録のみ（Issue 化せず・キーと観測回数）
+{資格判定を満たさなかった Try のキー・観測回数（n/2）}
+
 ### 次のアクション
 - Try Issue の対応: クラウドは `mcp__github__list_issues(labels=["type:retro-try"], state="OPEN")`（L-114）/ ローカルは `gh issue list -R __OWNER__/__REPO__ --label "type:retro-try" --state open`
 ```
@@ -256,13 +261,20 @@ python3 "${CLAUDE_PROJECT_DIR}/tools/slack_notify.py" pipeline \
 > 背景: 「振り返り = Try を全件 Issue 化する」設計は WIP 制限のない PUSH 型で、到着率 λ がパイプライン回数に比例して
 > 無制限に伸びる一方、消化側は上限つきのため在庫 L = λW（リトルの法則・Little 1961）が単調増加する。
 > 消化上限の引き上げだけでは λ が上回る限り解決しない。設計議論は `content/discussions/retro-issue-overflow-20260904/`。
+>
+> **#563 後も滞留は続いた**（追補・#662・議論 `content/discussions/retro-issue-stagnation-20260914/`）: 起票上限後も λ_in がパイプライン回数に比例する一方 μ_out は上限つきのため、在庫は WIP 上限に張り付き「常時オープン・TTL 日数で放置後に `not_planned`」が定常状態になった。#563 は発散を止めたが **水準（30 件・30 日）を滞留として固定** しており、TTL クローズは「実装されない見送り」を Little の法則上の退出として偽装していた。今回、Try の既定を Issue から **候補台帳への記録** に変え、Issue 化は下表の資格判定を満たすときだけに限定する PUSH → PULL 転換を行った。
 
 | 制御点 | 値 | 実装先 | 根拠 |
 |--------|-----|--------|------|
-| **起票上限**（1 回のレトロで新規 Issue 化する Try） | **3 件**（`urgency:blocker` は上限外。priority high → medium の順に採用し、超過分は完了報告の「見送り Try」に記録） | `retrospective` Step 3 | Kanban の WIP 制限（Anderson『Kanban』2010）・スクラムガイド 2020「最もインパクトの大きい改善だけをスプリントバックログへ」 |
-| **WIP 上限**（オープン `type:retro-try` の累積） | **30 件**（以上で `retrospective` が「追記のみモード」= 新規 Issue 作成を停止し既存 Issue への追記のみ行う） | `retrospective` Step 3-0 | プルシステムは「引く場所」で WIP を強制する（同上）。`retro-try-handler` の処理上限表「30 件以上」・`workflow-health-check` 5-a の 30 件 Warning と同じ数値 |
-| **TTL 出口**（未着手 Try の自動クローズ） | **30 日** 更新なし（`status:waiting-claude` かつ `urgency:blocker` でない Issue を `not_planned` でクローズ。1 回の実行で最大 **5 件**） | `retro-try-handler` Step 1.5 | 出口のない在庫は L を単調増加させる。`workflow-health-check` 5-e の「30 日で沈黙」と同じ数値 |
-| **再発 reopen 窓** | **90 日**（TTL でクローズされた Issue と同種の Try が再検出されたら reopen して再発コメント） | `retrospective` reference.md F | 誤クローズの回復コストを下げ TTL を安全側に倒す |
+| **資格判定**（Try を Issue 化してよい条件） | `urgency:blocker` 即時 ∨（同一キーが観測窓内に 2 回以上 ∧ オープン `type:retro-try`〔`urgency:blocker` と台帳を除く〕< WIP 上限） | `retrospective` Step 3-1 | Kanban（Anderson『Kanban』2010）はプル地点で WIP を強制する・スクラムガイド 2020「最もインパクトの大きい改善だけをスプリントバックログへ」 |
+| **観測窓**（同一キーの再発カウント） | **30 日**（前回 `last_seen` からこれを超えて再観測されたら `count` を 1 にリセット。`count ≥ 2` は窓内の連続観測を意味する） | `retrospective` reference.md F | 同上 |
+| **WIP 上限**（オープン `type:retro-try`〔`urgency:blocker` を除く〕の累積） | `μ_base × W_target` = 2 件/日（`retro-try-handler` 処理上限表の最低区分）× 3 日 = **6 件**。式で定義し、`retro-try-handler` の処理上限が変わったら本値も追随する | `retrospective` Step 3-0 | リトルの法則 L = λW（Little 1961）。μ は据え置き |
+| **TTL 出口**（昇格済み Issue の未着手自動クローズ） | **30 日** 更新なし。1 回の実行で最大 **5 件**（`not_planned`） | `retro-try-handler` Step 1.5 | 昇格済み在庫のバックストップ出口（現行維持） |
+| **再発 reopen 窓** | **90 日**（昇格時にのみ closed_list を参照して reopen 判定） | `retrospective` reference.md F | 誤クローズの回復コストを下げる |
+| **台帳保持**（候補台帳・本文の集約表） | 直近観測から **90 日** を超えたキーは本文から削除する | `retrospective` reference.md K | 本文をトークン有界に保つ |
+| **台帳ローテーション** | コメント数が **300 件** に達したら新台帳 Issue を作成し本文を引き継ぐ | `retrospective` reference.md K | `list_issues` 応答の `comments` で追加 API なしに判定できる |
+
+> 旧「起票上限 3 件/レトロ」は廃止した（理由: 空き枠判定〔WIP 上限との差分〕が上限として機能するため冗長）。
 
 上限値を変えるときは **本表を先に更新** し、各 SKILL.md / reference.md が出典明記のうえ再掲している値を **同一 PR で更新する**
 （再掲箇所は `grep -rn "WIP 制御" .claude/skills docs/rules` で列挙できる。参照なしの独立した数値定義は作らない）。
@@ -270,8 +282,8 @@ python3 "${CLAUDE_PROJECT_DIR}/tools/slack_notify.py" pipeline \
 
 ## 禁止事項
 
-- Try アイテムを Issue 化せずに「次回気をつける」で済ませない（**例外**: 上記 WIP 制御の起票上限・WIP 上限で見送った Try は Issue 化しないが、完了報告の「見送り Try」に **記録は残す**。記録が残る限り本条項の対象外）
-- 同じ Problem が 2 回以上繰り返されても新しい Try Issue を作らないでいる（**例外**: WIP 上限中は既存 Issue への再発コメント追記で代替する。TTL クローズ済み Issue は新規作成ではなく reopen で扱う）
-- 1 回のレトロで起票上限（3 件）を超えて新規 Issue を作る・WIP 上限（30 件）以上の状態で新規 Issue を作る（在庫の発散を防ぐ WIP 制御の無効化）
+- Try を Issue 化も候補台帳への記録もせずに「次回気をつける」で済ませない（資格判定を満たさない Try は台帳記録のみで足り、それは記録ありとみなす）
+- 資格判定を満たす Try を Issue 化・reopen しないでいる（TTL クローズ済み Issue と同種の Try は新規作成ではなく reopen で扱う）
+- 資格判定を満たさない Try を Issue 化する・WIP 上限以上の状態で非 `urgency:blocker` の Try を Issue 化する（在庫の発散を防ぐ WIP 制御の無効化）
 - KPT を 3 役割の並列実行ではなく逐次実行する（並列化必須）
 - `type:retro-try` ラベルなしで Try Issue を作成する（フィルタリングが機能しなくなる）

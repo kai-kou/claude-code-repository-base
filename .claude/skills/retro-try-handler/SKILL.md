@@ -85,6 +85,10 @@ mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])
 かけたい場合は最も絞り込み効果の高い `type:retro-try` のみで取得し、応答の `labels` 配列に
 `status:waiting-claude` も含まれる Issue だけを client-side で絞り込む。
 
+⚠️ 取得結果からタイトルが `[Retro][ledger]` で始まる Issue（候補台帳 Issue）を除外する。台帳は
+`retrospective` 側だけが読み書きし、本スキルは消化対象に含めない（`status:waiting-claude` の
+client-side 絞り込みで通常は既に落ちるが、取りこぼし防止のため明示する）。
+
 取得後、以下の優先順でソートする（`reference.md` A に urgency/priority マッピングの完全な決定表がある）:
 
 1. `urgency:blocker` → `dep:blocking` → `urgency:quality`+`priority:high` → `urgency:process`+`priority:high` → …
@@ -99,11 +103,15 @@ mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])
 
 ---
 
-## Step 1.5: 未着手 Try の TTL 自動クローズ（振り返りレーン内の出口）
+## Step 1.5: 未着手 Try の TTL 自動クローズ（昇格済み Issue のバックストップ出口）
 
 > 数値（TTL 30 日・1 回最大 5 件・reopen 窓 90 日）の SSOT は `docs/rules/retrospective-rules.md`「WIP 制御」。
 > `type:retro-try` はリファインメントの 4 出口から除外されている（`improvement-lane-map.md` §2 ルール 5・#160）ため、
-> 「実装する」以外の出口を **振り返りレーン内のこの Step** が持つ。Step 2 の選定より前に在庫を減らしてから優先順位付けする。
+> 「実装する」以外の出口を **振り返りレーン内のこの Step** が持つ。PUSH → PULL 転換（#662）後は Issue 化そのものが
+> 資格判定を通過した昇格済み Try に限られるため、本 Step は昇格済み Issue のバックストップとして働き、
+> 通常運用ではほぼ発火しない（見送られた大半の Try は Issue 化されず候補台帳に留まるため対象に入らない）。
+> 候補台帳 Issue（`[Retro][ledger]` 接頭辞）自体は TTL 対象から除外する（判定式は `reference.md` H）。
+> Step 2 の選定より前に在庫を減らしてから優先順位付けする。
 
 Step 1 で取得した `type:retro-try` オープン Issue のうち、**`status:waiting-claude` で `urgency:blocker` でなく、30 日間更新がないもの**（`done_type:D-plan` の large も含む）を `not_planned` でクローズし、再発時に reopen される旨のコメントを残す。1 回の実行で **最大 5 件**（残りは次回へ持ち越す。1 件 = 2 呼び出しのため、ツール呼び出し上限〔8 個/ターン〕に合わせて中間報告を挟みターンを分けてよい）。
 
@@ -136,7 +144,9 @@ Step 1 で取得した `type:retro-try` オープン Issue のうち、**`status
 | 30件以上 | 5件 | 最大スループット |
 
 > 1 ターンのツール呼び出しは 8 個以内（`session-safety-rules.md`）。処理上限を増やすときは中間報告を挟んで複数ターンに分散する。
-> バックログ残件数 30 件以上は `retrospective` 側の WIP 上限（`docs/rules/retrospective-rules.md`「WIP 制御」）と同じ境界で、発生側が新規起票を止めている状態。
+> PULL 転換（#662）後はオープン在庫が `retrospective` 側の WIP 上限（`docs/rules/retrospective-rules.md`「WIP 制御」）
+> 近傍に収まるため、通常運用は表の 0〜9 件区分で回る。表の上位区分（10 件以上）は移行期・blocker 連発時のバッファであり、
+> 恒常的に上位区分が発生する場合は資格判定ゲート（`retrospective` Step 3）が機能していない疑いとして扱う。
 
 推定工数ごとの対応方針: `small` は処理上限まで実装、`medium` は 1〜2 件、`large` は実装計画コメントのみ投稿（`done_type:D-plan` を付与し次回に回す）。
 
@@ -240,7 +250,7 @@ Issue クローズ後、対応する lessons エントリを確認する。手�
 
 | 関連スキル | 関係 |
 |-----------|------|
-| `retrospective` | Try Issue を生成する上流スキル |
+| `retrospective` | Try Issue を生成する上流スキル。候補台帳（`[Retro][ledger]`）の読み書きは `retrospective` 側のみが担い、本スキルは台帳を参照しない |
 | `self-reviewer` | 実装後のセルフレビューに使用（PR 作成時） |
 | `pr-review-watcher` | PR 作成後の AIレビュー監視・自動マージに使用 |
 | `project-manager` | Projects V2 のステータス更新が必要な場合に参照 |
