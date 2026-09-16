@@ -13,9 +13,13 @@ INPUT=$(cat)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hook_block.sh
 source "$HOOK_DIR/lib/hook_block.sh"
+# shellcheck source=lib/secret_scan.sh
+source "$HOOK_DIR/lib/secret_scan.sh"
 
 # ツール名を抽出（printf を使い、バックスラッシュを含む入力でも echo のエスケープ解釈に依存しない）
 TOOL_NAME=$(printf '%s\n' "$INPUT" | jq -r '.tool_name // ""')
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+_ss_warn=""
 
 # MCP 経由の PR 作成（mcp__github__create_pull_request）も Bash の gh pr create と同じ
 # 事前ゲート（未コミット検出 + セルフレビュー機械チェック + Layer 1 リマインダー）に通す。
@@ -26,8 +30,87 @@ if [ "$TOOL_NAME" = "mcp__github__create_pull_request" ]; then
   exit $?
 fi
 
+# MCP 経由の直接 push（mcp__github__push_files / create_or_update_file）は git を通らないため
+# git pre-commit フックも push 前検査も効かない。tool_input のファイル内容をそのまま秘密検知に
+# 掛ける（Issue #678・唯一の検査点）。
+if [ "$TOOL_NAME" = "mcp__github__push_files" ] || [ "$TOOL_NAME" = "mcp__github__create_or_update_file" ]; then
+  # `out=$(…); rc=$?` は set -e で代入時に落ちて hook_block に到達しない（exit 1 = 非ブロック）。必ず `|| rc=$?` で受ける
+  _ss_rc=0
+  _ss_out=$(printf '%s\n' "$INPUT" | jq -c '.tool_input // {}' | secret_scan_run "$REPO_ROOT" --json 2>&1) || _ss_rc=$?
+  if [ "$_ss_rc" -eq 1 ]; then
+    hook_block "BLOCK: ${TOOL_NAME} の内容に秘密（トークン・鍵・認証情報）の疑いがあります（#678）。
+${_ss_out}
+秘密なら値をローテーションして内容から外し、誤検知なら該当行末に secret-scan:ignore を付けて再実行してください。
+デグレ検証: python3 tools/secret_scan.py --self-test"
+  elif [ "$_ss_rc" -ge 2 ]; then
+    # 内容は手元にあるので検査できないまま通す理由が無い（fail-closed）。git push / MCP 以外の経路を案内しない
+    hook_block "BLOCK: ${TOOL_NAME} の内容の秘密検知を実行できませんでした（exit=${_ss_rc}・#678）。
+${_ss_out}
+tools/secret_scan.py の状態を確認してから再実行してください（スキャナ自体の不具合が原因のときだけ CLAUDE_BASE_DISABLE_SECRET_SCAN=1 で一時回避可）。"
+  fi
+  exit 0
+fi
+
 # コマンド文字列を抽出（JSON の tool_input.command フィールド）
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+# 継続行（`\` + 改行）を 1 行に連結した文字列。grep は行単位なので、`git commit \` 改行 `--no-verify` のように
+# フラグを次の行へ逃がされると素通りする（#680 Layer 1 指摘）。以降のフラグ判定はすべてこちらを見る
+COMMAND_JOINED=$(secret_scan_join_lines "$COMMAND")
+# フラグ判定用にクォート内（コミットメッセージ等）を落とした文字列（`-m "note: --no-verify は禁止"` を誤検知しない）
+COMMAND_UNQUOTED=$(printf '%s\n' "$COMMAND_JOINED" | sed -E "s/\"[^\"]*\"//g; s/'[^']*'//g")
+
+# git を経由せず GitHub Contents API へ直接書き込む Bash 経路（gh api / curl の PUT）は、git pre-commit も
+# push 前検査も MCP 検査も通らない。内容が base64 やファイル参照でコマンド文字列に現れないため検査できず、
+# 検査済みの経路（git push / mcp__github__push_files）へ誘導してブロックする（#678 Layer 1 指摘）。
+if printf '%s\n' "$COMMAND_JOINED" | grep -qE '(gh[[:space:]]+api|api\.github\.com)[^|;&]*/contents/' \
+   && printf '%s\n' "$COMMAND_JOINED" | grep -qiE '(-X|--request|--method|-m)[[:space:]=]*["'"'"']?(put|delete)\b|(^|[[:space:]])(-T|--upload-file|-d|--data(-binary|-raw|-urlencode)?)([[:space:]=]|$)|-f[[:space:]]+content=|--input|--field[[:space:]]+content='; then
+  hook_block "BLOCK: GitHub Contents API への直接書き込み（gh api / curl の PUT）は秘密検知ゲートを通らないため禁止しています（#678）。
+ファイルの push は git push（未 push 差分を検査）か mcp__github__push_files / create_or_update_file（内容を検査）を使ってください。
+REST フォールバックが必要なときは python3 tools/github_push_helper.py（送信前に秘密検知を実行する）を使ってください。"
+fi
+
+# `git commit --no-verify` / `-n` / `-c core.hooksPath=…` は git pre-commit（全コミット経路の検査点）を外す。
+# PreToolUse は実行前の状態しか見られないため、`git add -A && git commit --no-verify && git push` を 1 コマンドで
+# 連結されると commit 時・push 時の検査がどちらも「まだ存在しない」変更を見ることになり、pre-commit だけが
+# 唯一の検査点になる。そのため無効化フラグ自体をブロックする（#678 Layer 1 セキュリティ指摘）。
+if printf '%s\n' "$COMMAND_JOINED" | grep -qE '\bgit\b' && printf '%s\n' "$COMMAND_JOINED" | grep -qE '\bcommit\b|core\.hooksPath'; then
+  _bp_rc=0
+  secret_scan_commit_bypass "$COMMAND" || _bp_rc=$?
+  if [ "$_bp_rc" -eq 0 ]; then
+    hook_block "BLOCK: git commit の --no-verify / -n / core.hooksPath 上書きは秘密検知（git pre-commit）を無効化するため禁止しています（#678）。
+検知が誤検知なら該当行末に secret-scan:ignore、テストフィクスチャは config/secret_scan_allowlist.txt に glob を追記してから通常どおりコミットしてください。"
+  elif [ "$_bp_rc" -eq 2 ]; then
+    # クォートが閉じていない等で argv を静的に復元できない。無効化フラグの有無を判定できないので fail-closed
+    hook_block "BLOCK: git commit を含むコマンドのクォートを静的に解析できません（#678）。
+コミットメッセージは --body 相当の複雑な引用を避け、heredoc 変数か -F <file> で渡すか、コマンドを分割して再実行してください。"
+  fi
+fi
+
+# git commit の秘密検知（ステージ済み差分・Issue #678）
+# PreToolUse 時点の index を検査する。`git add -A && git commit` のように同一コマンドでステージする
+# 経路はここでは index が空で見えないため、git 自身の pre-commit フック（git-pre-commit.sh・
+# tools/install_git_hooks.sh が導入）が受け止める。両層で同じスキャナを使う。
+if echo "$COMMAND" | grep -qE '\bgit\b' && echo "$COMMAND" | grep -qE '\bcommit\b'; then
+  # 対象リポジトリの追随: `git -C <dir> commit` / `cd <dir> && git commit`（publish-sync の公開側チェックアウト等）
+  # はリテラルパスなら解決してそのリポジトリの index を検査する。変数展開（$CHECKOUT 等）は静的に解決できないため
+  # cwd のリポジトリを検査する（限界は security-posture-controls.md §1.6 に明記）。
+  _ss_root=$(secret_scan_target_dir "$COMMAND" commit)
+  _ss_root="${_ss_root:-$REPO_ROOT}"
+  # `out=$(…); rc=$?` は set -e で代入時に落ちて hook_block に到達しない（exit 1 = 非ブロック）。必ず `|| rc=$?` で受ける
+  _ss_rc=0
+  _ss_out=$(SECRET_SCAN_HOME="$REPO_ROOT" secret_scan_run "$_ss_root" --staged 2>&1) || _ss_rc=$?
+  if [ "$_ss_rc" -eq 1 ]; then
+    hook_block "BLOCK: ステージ済みの変更に秘密（トークン・鍵・認証情報）の疑いがあります。コミットを差し戻します（#678）。
+${_ss_out}
+対処: 秘密なら git rm --cached <path> → .gitignore へ追加（push 済みなら値のローテーション必須）。
+      誤検知なら該当行末に secret-scan:ignore、テストフィクスチャ等は config/secret_scan_allowlist.txt に glob を追記。
+デグレ検証: bash tools/test_secret_scan.sh"
+  elif [ "$_ss_rc" -ge 2 ]; then
+    # コミット時は fail-open（スキャナ不具合で全コミットを止めない）だが、無音にはしない。
+    # 末尾で additionalContext として Claude に届ける（git pre-commit 側も同じ状況なら stderr に警告する）
+    _ss_warn="[secret-scan] ⚠ ステージ済み差分の秘密検知を実行できませんでした（exit=${_ss_rc}）。検査なしで通します: $(printf '%s' "$_ss_out" | tail -n1)"
+  fi
+fi
 
 # git push チェック（main/master 直接 push のブロック）
 # 【注意】"git" と "push" が隣接する 'git\s+push' だけだと `git -C <path> push ...` を
@@ -201,7 +284,7 @@ _sensitive_file_access() {
       # 解説ドキュメントは対象外（"credentials" を扱う記事・手順書で通常運用が止まるのを防ぐ）
       *.md|*.markdown|*.rst|*.adoc|*.html|*.htm) continue ;;
       # 鍵・証明書は拡張子で判定
-      *.pem|*.key|*.p12|*.pfx|*.jks|*.keystore) _sfa_hit=0; break ;;
+      *.pem|*.key|*.p12|*.pfx|*.jks|*.keystore|*.ppk) _sfa_hit=0; break ;;
     esac
     # 認証情報はベース名の「語」で判定（語境界 = 先頭 or `-_.` 区切り）
     if printf '%s' "$_sfa_base" \
@@ -248,5 +331,8 @@ else
   fi
 fi
 
-# 該当なし: 許可
+# 該当なし: 許可（秘密検知の fail-open 警告があれば additionalContext で Claude に届ける）
+if [ -n "${_ss_warn:-}" ]; then
+  jq -n --arg ctx "$_ss_warn" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":$ctx}}'
+fi
 exit 0

@@ -44,6 +44,10 @@ git commit -m "[{ID}] checkpoint: {フェーズ名} Step {N} 完了（{概要}�
 git push -u origin {ブランチ名}
 ```
 
+> `git add -A` が秘密（`.env` / 鍵 / トークン）を拾っても、コミット時の秘密検知ゲート（git pre-commit・
+> `docs/rules/security-posture-controls.md` §1.6）が止める。止まったら該当ファイルを `.gitignore` へ入れて
+> `git rm --cached` してから再実行する（検知を無効化して通さない・#678）。
+
 コミットメッセージ規約:
 - `[{ID}]` は対象エンティティの ID（プロジェクト定義・例: `[V015]`）
 - `checkpoint:` プレフィックスで検索可能にする

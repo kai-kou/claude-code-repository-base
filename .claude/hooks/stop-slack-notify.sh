@@ -20,6 +20,8 @@ stop_hook_active=$(echo "$input" | jq -r '.stop_hook_active // "false"' 2>/dev/n
 if ! git rev-parse --git-dir >/dev/null 2>&1; then exit 0; fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# shellcheck source=lib/secret_scan.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/secret_scan.sh"
 
 # ── 日次コスト集計（#1213・#95・#106・#242）────────────────────────────
 # 月次レポート（content/analytics/cost_monthly/YYYY-MM.json）は gitignore 対象で、
@@ -121,8 +123,9 @@ if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
         if [ -n "$_session_id" ]; then
           _tmp_index=$(mktemp 2>/dev/null || echo "")
           if [ -n "$_tmp_index" ]; then
+            # 一時 index でも秘密の疑いがあるパスは除外する（#678・スナップショットは復元で作業ツリーへ戻るため）
             if GIT_INDEX_FILE="$_tmp_index" git -C "$REPO_ROOT" read-tree HEAD 2>/dev/null \
-               && GIT_INDEX_FILE="$_tmp_index" git -C "$REPO_ROOT" add -A -- . ':(exclude)content/analytics/cost_monthly/' 2>/dev/null; then
+               && GIT_INDEX_FILE="$_tmp_index" stage_all_except_secrets "$REPO_ROOT" ':(exclude)content/analytics/cost_monthly/'; then
               _snap_tree=$(GIT_INDEX_FILE="$_tmp_index" git -C "$REPO_ROOT" write-tree 2>/dev/null || echo "")
               if [ -n "$_snap_tree" ]; then
                 _snap_commit=$(git -C "$REPO_ROOT" commit-tree "$_snap_tree" -p HEAD \
@@ -149,7 +152,8 @@ if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
         # 月次コストテレメトリ（cost_monthly）は feature ブランチに混入させない（#106・#242）。
         # gitignore 化済みだが、gitignore 反映前の旧ブランチで追跡されている場合に備え
         # pathspec でも明示除外する（永続化は telemetry/cost-data ブランチが担う）。
-        git -C "$REPO_ROOT" add -A -- . ':(exclude)content/analytics/cost_monthly/' 2>/dev/null || true
+        # 一括ステージ後に秘密の疑いがあるパスをアンステージする（#678・作業は消えず秘密だけ乗せない）
+        stage_all_except_secrets "$REPO_ROOT" ':(exclude)content/analytics/cost_monthly/'
         # cost_monthly 以外に変更が無ければ何もコミットしない（空コミットを避ける）
         #
         # メッセージは意図的に `[wip]` プレフィックスを維持する（#483）。

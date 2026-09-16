@@ -16,6 +16,7 @@
 | auto モードなのに Bash の `grep` 系コマンドで承認プロンプトが出る・自動モードで権限プロンプトが増えた | `docs/rules/lessons/permissions.md`（L-127） |
 | 無人ルーティンが承認プロンプトのまま停止している・作業ツリー外や `.claude/` `.git/` への書き込みがフックにブロックされた・MCP ツールの承認に「常に許可」が無い | `docs/rules/lessons/permissions.md`（L-129 / L-130） |
 | PR レビュー・CI 系 | `docs/rules/lessons/pr-review.md` / `ci-cd.md` |
+| コミット / push / PR 作成が `[secret-scan]` `[pre-git-push-check] ❌ … 秘密` でブロックされた・自動保全コミットが「秘密の疑い」でファイルを除外した | `docs/rules/lessons/session-safety.md`（L-134）・`security-posture-controls.md` §1.6 |
 | その他カテゴリ | `docs/rules/lessons/<category>.md` |
 
 ---

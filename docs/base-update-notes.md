@@ -31,6 +31,22 @@
 
 ---
 
+## 2026-09-16（Issue #678）秘密（トークン・鍵・認証情報）のコミット / push 検知ゲートと `.gitignore` 管理ブロックの配布
+
+**変更内容**:
+- `tools/secret_scan.py`（標準ライブラリのみ）を共通実装に、コミット（git pre-commit）・`git commit` / `git push`（PreToolUse）・MCP 直 push（`push_files` / `create_or_update_file`）・PR 作成前（`self_review_check.py`）の 5 検査点で秘密を検知してブロックする。自動保全コミット 3 フックは検知パスをアンステージしてから `[wip]` コミットする（作業保全は維持・秘密だけ乗せない）
+- git pre-commit フック（`.claude/hooks/git-pre-commit.sh`）を `tools/install_git_hooks.sh` が `.git/hooks/pre-commit` に導入する（クラウドは `session-start.sh`、ローカルは `apply-to-repo.sh` が実行。本ベース由来でない既存 pre-commit は上書きしない）
+- `.gitignore` の秘密パターンをマーカー区間（`# >>> claude-code-base: secrets (managed block) >>>`）にまとめ、`apply-to-repo.sh` が下流の `.gitignore` へ冪等に追記・更新する（区間の外は不変）
+- `.claude/settings.json` の PreToolUse matcher に `mcp__github__push_files` / `mcp__github__create_or_update_file` を追加
+
+**下流で必要な手動手順**:
+1. `apply-to-repo.sh` 再実行後、`git diff .gitignore` で管理ブロックが入ったことを確認してコミットする
+2. **既に追跡されている秘密の棚卸し**: `python3 tools/secret_scan.py --all` を実行し、検知されたファイルは `git rm --cached <path>` で追跡解除してコミットし、**値をローテーションする**（履歴に残った秘密はローテーション以外に無効化できない。履歴からの完全削除が必要なら `git filter-repo` を別途判断）
+3. 誤検知（テストフィクスチャ・文書上の例示）は該当行末に `secret-scan:ignore` を付けるか、`config/secret_scan_allowlist.txt`（1 行 1 パス glob）を作って除外する
+4. `.claude/settings.json` を温存している下流（`.base-latest` 併置）は、PreToolUse の matcher に `|mcp__github__push_files|mcp__github__create_or_update_file` を追加する（無いと MCP 直 push が無検査のまま）
+5. husky 等で `core.hooksPath` を使っている下流は、その pre-commit から `bash .claude/hooks/git-pre-commit.sh || exit 1` を呼ぶ（`install_git_hooks.sh` は上書きしない）
+6. （推奨・アカウント権限が要るため人間が実施・A-6 相当）GitHub の リポジトリ設定 → Code security → Secret scanning の **Push protection** を有効化する（公開リポジトリは無料、private は GitHub Advanced Security が必要）
+
 ## 2026-09-11（Issue #627 PR-2）Layer 1 レビューの計測・学習ループ — JSONL 記録・週次集計・AI 指摘判定の置換
 
 **変更内容**:

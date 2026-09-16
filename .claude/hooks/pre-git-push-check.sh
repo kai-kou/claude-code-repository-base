@@ -24,6 +24,8 @@ set -euo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/hook_block.sh
 source "$HOOK_DIR/lib/hook_block.sh"
+# shellcheck source=lib/secret_scan.sh
+source "$HOOK_DIR/lib/secret_scan.sh"
 
 BLOCK_MESSAGE="[pre-git-push-check] ❌ main/master への直接 push をブロックしました。
 
@@ -336,6 +338,39 @@ main() {
   decision=$(scan_and_decide "$command")
   if [[ "$decision" == "block" ]]; then
     hook_block "$BLOCK_MESSAGE"
+  fi
+
+  # 未 push コミットの秘密検知（Issue #678）。リモートへ出る直前の最後の検査点で、
+  # `git commit --no-verify` や pre-commit フック未導入のクローンで作られたコミットも捕捉する。
+  # 別リポジトリへの push（publish-sync 等）でもこの開発リポジトリの未 push 差分を見るが、
+  # 未 push 差分が無ければ何も起きず、あれば「秘密を含むコミットが存在する」事実自体が対処対象。
+  # push 対象リポジトリの追随: `git -C <dir> push` / `cd <dir> && git push`（publish-sync の公開側チェックアウト等）
+  # はリテラルパスなら解決してそのリポジトリの未 push 差分を検査する（スキャナ本体はこの開発リポジトリの
+  # tools/ を SECRET_SCAN_HOME 経由で使う）。変数展開のパスは静的に解決できないため cwd のリポジトリを検査する
+  # （publish-sync は SKILL.md 側で push 前に自前で --unpushed を実行する）。
+  local ss_out ss_rc=0 ss_root
+  ss_root=$(secret_scan_target_dir "$command" push)
+  ss_root="${ss_root:-$REPO_ROOT}"
+  ss_out=$(SECRET_SCAN_HOME="$REPO_ROOT" secret_scan_run "$ss_root" --unpushed 2>&1) || ss_rc=$?
+  if [[ "$ss_rc" -ge 2 ]]; then
+    # リモートへ出る直前の検査点は fail-closed（実行エラーを「検知なし」と読み替えない）
+    hook_block "[pre-git-push-check] ❌ push をブロックしました。未 push コミットの秘密検知を実行できませんでした（exit=${ss_rc}・#678）。
+
+${ss_out}
+
+基準ブランチを同期してから再実行してください: git fetch origin +main:refs/remotes/origin/main
+スキャナ自体の不具合が原因のときだけ CLAUDE_BASE_DISABLE_SECRET_SCAN=1 を前置して一時回避できます（検知を消す目的で使わない）。"
+  fi
+  if [[ "$ss_rc" -eq 1 ]]; then
+    hook_block "[pre-git-push-check] ❌ push をブロックしました。未 push のコミットに秘密（トークン・鍵・認証情報）の疑いがあります（#678）。
+
+${ss_out}
+
+対処（まだリモートに出ていないので履歴から取り除ける）:
+  git rm --cached <path> && echo '<path>' >> .gitignore   # 追跡解除 + 再発防止
+  git commit --amend --no-edit                            # 直前のコミットに含まれる場合
+  # 複数コミットにまたがる場合は git reset --soft <base> で積み直す（pr-review-flow-summary.md 項目 0 と同じ手順）
+誤検知なら該当行末に secret-scan:ignore、テストフィクスチャ等は config/secret_scan_allowlist.txt に glob を追記して積み直してください。"
   fi
 
   exit 0

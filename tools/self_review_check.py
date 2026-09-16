@@ -326,6 +326,43 @@ def python_syntax_errors(files: list[str]) -> list[str]:
     return errs
 
 
+def secret_scan_errors() -> list[str]:
+    """PR 作成前の秘密検知（Issue #678・Error・ブロック）。
+
+    origin/<default> との差分（追加行）とファイル名を tools/secret_scan.py で検査する。
+    コミット時（git pre-commit）・push 時（pre-git-push-check.sh）を素通りした経路
+    （--no-verify・フック未導入のクローン・別環境で作られたコミット）でも、マージ前に止める最後の機械ゲート。
+    CLAUDE_BASE_DISABLE_SECRET_SCAN=1 で無効化（.claude/hooks/lib/secret_scan.sh と同じ脱出ハッチ）。
+    """
+    if os.environ.get("CLAUDE_BASE_DISABLE_SECRET_SCAN") == "1":
+        return []
+    scanner = Path("tools/secret_scan.py")
+    if not scanner.is_file():
+        return []
+    try:
+        r = sh([sys.executable, str(scanner), "--base", f"origin/{default_branch()}"], timeout=30)
+    except subprocess.TimeoutExpired:
+        return [
+            "秘密検知（secret_scan.py --base）が 30 秒以内に完了しませんでした。"
+            " python3 tools/secret_scan.py --base origin/main を手動実行して確認してください。"
+        ]
+    if r.returncode == 1:
+        return [
+            "秘密の疑い（#678・履歴から外してから PR を作る。誤検知は行末 secret-scan:ignore か"
+            f" config/secret_scan_allowlist.txt）: {line}"
+            for line in r.stdout.splitlines() if line.strip()
+        ]
+    if r.returncode != 0:
+        # 実行エラー（origin/<default> 未 fetch 等）は「検知なし」ではない。PR 前の最後のゲートなので
+        # fail-closed にし、原因（stderr）を添えて止める（git fetch origin +main:refs/remotes/origin/main で解消する）
+        detail = (r.stderr or r.stdout).strip().splitlines()
+        return [
+            f"秘密検知（secret_scan.py --base origin/{default_branch()}）を実行できませんでした（exit={r.returncode}）。"
+            f" 基準ブランチを fetch してから再実行してください: {detail[-1] if detail else '詳細なし'}"
+        ]
+    return []
+
+
 def shellcheck_warnings(files: list[str]) -> list[str]:
     """shellcheck 導入済みの環境でのみ、対象シェルファイルを検査する（Warning・Issue #627）。
 
@@ -769,6 +806,9 @@ def main() -> int:
 
     # Python 構文エラー（Error・ブロック・Issue #627 対策 C）
     errors.extend(python_syntax_errors(files))
+
+    # 秘密検知（Error・ブロック・Issue #678）
+    errors.extend(secret_scan_errors())
 
     # shellcheck（Warning・shellcheck 導入済み環境のみ・Issue #627 対策 C）
     warnings.extend(shellcheck_warnings(files))

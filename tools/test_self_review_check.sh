@@ -74,7 +74,11 @@ EOS
 run_review() {
   local branch="$1"; shift
   git -C "$WORK/repo" checkout --quiet "$branch"
-  REVIEW_OUT=$(cd "$WORK/repo" && env "$@" python3 "$SELF_REVIEW" 2>&1)
+  # 親プロセス（pre-pr-create-check.sh → self_review_check.py の対応テスト起動）が渡す
+  # SELF_REVIEW_PR_BODY_FILE を落としてから起動する。_read_pr_body() は FILE を優先するため、
+  # 継承したままだとテストの SELF_REVIEW_PR_BODY が親 PR の本文に上書きされ、本文の書式次第で
+  # 「証跡あり/なし」の両ケースが成立しなくなる（#679・#678 の PR 作成時に実測）
+  REVIEW_OUT=$(cd "$WORK/repo" && env -u SELF_REVIEW_PR_BODY_FILE "$@" python3 "$SELF_REVIEW" 2>&1)
   REVIEW_EXIT=$?
 }
 

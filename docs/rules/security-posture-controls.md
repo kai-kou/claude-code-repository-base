@@ -33,8 +33,8 @@
 `.claude/settings.json` の `permissions.deny`:
 
 - `Read(.env)` / `Read(.env.*)`
-- `Read(**/*.pem)` / `Read(**/*.key)` / `Read(**/*.p12)`
-- `Read(**/credentials*)` / `Read(**/id_rsa)` / `Read(**/id_ed25519)`
+- `Read(**/*.pem)` / `Read(**/*.key)` / `Read(**/*.p12)` / `Read(**/*.pfx)` / `Read(**/*.jks)` / `Read(**/*.keystore)` / `Read(**/*.ppk)`
+- `Read(**/credentials*)` / `Read(**/id_rsa)` / `Read(**/id_dsa)` / `Read(**/id_ecdsa)` / `Read(**/id_ed25519)`
 - `Read(**/.aws/**)` / `Read(**/*service-account*.json)`
 - `Write(.claude/settings.local.json)` / `Edit(.claude/settings.local.json)`
 
@@ -114,8 +114,9 @@
 
 | フック | イベント | 役割 |
 |--------|---------|------|
-| `pre-tool-use-router.sh` | PreToolUse(Bash) | Bash 実行の事前検査。`.env` ガード（`_sfa_env_access`）＋ 鍵・証明書・認証情報ガード（`_sensitive_file_access`。deny が届かない **cwd 外** も塞ぐ第2層。判定範囲の限界は §1.1 の注記・回帰検証は `bash tools/test_sensitive_file_guard.sh`） |
-| `pre-git-push-check.sh` | （router 経由） | **main 直接 push 防止**・push 安全確認 |
+| `pre-tool-use-router.sh` | PreToolUse(Bash / MCP 直 push) | Bash 実行の事前検査。`.env` ガード（`_sfa_env_access`）＋ 鍵・証明書・認証情報ガード（`_sensitive_file_access`。deny が届かない **cwd 外** も塞ぐ第2層。判定範囲の限界は §1.1 の注記・回帰検証は `bash tools/test_sensitive_file_guard.sh`）＋ `git commit`（ステージ済み）と `mcp__github__push_files` / `create_or_update_file`（tool_input）の秘密検知（§1.6） |
+| `pre-git-push-check.sh` | （router 経由） | **main 直接 push 防止**・push 安全確認・未 push コミットの秘密検知（§1.6） |
+| `git-pre-commit.sh` | git pre-commit（`.git/hooks/`・`tools/install_git_hooks.sh` が導入） | ステージ済み差分の秘密検知。自動保全コミットを含む **全コミット経路** で発火（§1.6） |
 | `pre-pr-create-check.sh` | （router 経由） | PR 作成前チェック |
 | `pre-comment-post-check.sh` | （router 経由） | 外部コメント投稿前チェック |
 | `pre-image-gen-check.sh` | PreToolUse(画像生成) | 画像生成前の予算・前提チェック |
@@ -134,6 +135,41 @@
 
 `.mcp.json` のトークンは **環境変数展開**（`${GEMINI_MCP_AUTH_TOKEN}` 等）でハードコードなし。本番 DB 系 MCP は不採用。
 
+### 1.6 コミット・push 時の秘密検知（「入れない」側のゲート・Issue #678）
+
+§1.1〜1.3 はすべて **「Claude に秘密を読ませない」** 側の統制で、作業ツリーに置かれた秘密（`.env` 以外の
+`credentials.json` / `service-account*.json` / `id_rsa*` / トークン埋め込みの設定）が **git 履歴へ入る経路** は
+2026-09 まで無防備だった。自動保全コミット（`git add -A`）→ 自律 PR → 自動マージの完全自律フローには人の目が
+無いため、下流リポジトリで秘密の誤コミットが多発し、本リポジトリの main にも `id_rsa_test_tmp` が #592 で紛れ込んだ。
+共通実装は `tools/secret_scan.py`（標準ライブラリのみ・ファイル名ルール + 内容ルール・git 系モードは **追加行のみ** を見る）。
+
+| 検査点 | 実体 | 捕捉する経路 |
+|---|---|---|
+| ① git pre-commit | `.claude/hooks/git-pre-commit.sh`（`tools/install_git_hooks.sh` が `.git/hooks/pre-commit` へ導入。クラウドは `session-start.sh`、下流ローカルは `apply-to-repo.sh` が実行） | 自動保全コミット・`git add -A && git commit` 連結・人間の手元コミットを含む **全コミット経路**（`--no-verify` を除く） |
+| ② PreToolUse `git commit` | `pre-tool-use-router.sh`（`--staged`。`git -C <dir>` / `cd <dir> &&` のリテラルパスは対象リポジトリを追随。変数展開のパスは静的に解決できないため cwd のリポジトリを検査する） | ステージ済みの秘密（pre-commit 未導入のクローンでも効く） |
+| ③ PreToolUse `git push` | `pre-git-push-check.sh`（`--unpushed`。`git -C <dir>` / `cd <dir> &&` のリテラルパスは push 対象リポジトリを追随。upstream も origin/<default> も無い初回 push は空ツリー基準で全ファイルを検査） | 別環境・別クローンで作られたコミット。リモートへ出る直前の最後の検査点 |
+| ③' PreToolUse 無効化フラグ | `pre-tool-use-router.sh`（`git commit --no-verify` / `-n` / `-c core.hooksPath=` を shlex トークン化で判定してブロック。継続行は連結してから判定、クォート不整合で解析不能なら fail-closed） | `git add -A && git commit --no-verify && git push` を 1 コマンドで連結すると ②③ は実行前の状態しか見られず ① だけが検査点になるため、① を外す手段そのものを塞ぐ |
+| ④' Bash からの Contents API 直叩き | `pre-tool-use-router.sh`（`gh api` / `curl` の Contents API に対する書き込み形（PUT / DELETE・`--request` / `-X` 大小文字不問・`-T` / `-d` / `--data*` / `--input` / `-f content=`）をブロック）・`tools/github_push_helper.py`（送信前にファイル内容とコミットメッセージを検査・fail-closed） | git も MCP も通らない REST 経路 |
+| ④ PreToolUse MCP 直 push | `pre-tool-use-router.sh`（`mcp__github__push_files` / `create_or_update_file` の tool_input を `--json`） | git を通らない経路（①〜③ が一切効かない） |
+| ⑤ PR 作成前 | `tools/self_review_check.py`（`--base origin/<default>`・Error） | push 済みでもマージ前に止める |
+| 自動保全 3 フック | `lib/secret_scan.sh` の `stage_all_except_secrets`（`pre-compact` / `post-compact` / `stop-slack-notify`） | 検知パスをアンステージしてから `[wip]` コミット（作業保全は維持・秘密だけ乗せない・作業ツリーは触らない） |
+
+- **配布**: `.gitignore` の秘密パターンはマーカー区間（`# >>> claude-code-base: secrets (managed block) >>>`）にまとめ、
+  `apply-to-repo.sh` が下流の `.gitignore` へ冪等に追記・更新する（区間の外は不変。終端マーカーが欠けた壊れた区間は触らず警告）。
+  deny リスト・router・スキャナと **同じ語彙** で書く（一致の粒度は層ごとに違う: deny / router はベース名の語境界、`.gitignore` は glob、
+  スキャナは正規表現。語を増減するときは 4 箇所を同時に更新し、`tools/test_secret_scan.sh` が py / sh の語リストの一致を検証する）
+- **抑制**（強い順）: 行末 `secret-scan:ignore`（互換: `pragma: allowlist secret` / `gitleaks:allow`）→ `config/secret_scan_allowlist.txt`
+  （1 行 1 パス glob・下流が作る）→ プレースホルダ判定（`xxx…` / `<...>` / `${VAR}` / `example` 等）
+- **脱出ハッチ**: `CLAUDE_BASE_DISABLE_SECRET_SCAN=1`（スキャナ不具合時の一時回避専用。検知を消す目的で使わない）。
+  コミット時（① ②・自動保全 3 フック）はスキャナ不在・実行エラー（exit 2）を fail-open（stderr に警告して通す。スキャナの不具合で
+  全コミット・作業保全を止めると L-100 / CP-6 が崩れる）、**push 時（③）と PR 前（⑤）は fail-closed**（実行エラーでもブロック。
+  基準ブランチの fetch で解消する）。検知（exit 1）は全層でブロック
+- **限界**: 名前・正規表現ベース。プレフィックスの無い高エントロピー値は `key = "..."` の代入形でしか検知しない。
+  バイナリ・5 MiB 超は内容を見ない。`git -C "$VAR"` のように変数展開されたパスの別リポジトリは静的に追随できない
+  （publish-sync は SKILL.md 側で push 直前に自前で `--unpushed` を実行する）。`git commit-tree` / `update-ref` 等の
+  plumbing 直叩きは意図的な回避として射程外。GitHub 側の push protection（リポジトリ設定・A-6 相当）を併用すると二重化できる
+- 回帰検証: `bash tools/test_secret_scan.sh` / `python3 tools/secret_scan.py --self-test` / 全件監査 `python3 tools/secret_scan.py --all`
+
 ---
 
 ## 2. 残留リスクと運用上の注意
@@ -142,7 +178,8 @@
 |-----------|------|------|
 | `python3 tools/*.py` がサンドボックス外でネットワーク実行される | network allowlist は sandbox 側のみ。ツールは自前で送信先を実装 | ツール追加時は送信先・秘密情報の扱いをレビューする |
 | bypass のため誤操作も即実行される | deny / hook / PRフローで吸収 | 破壊的操作は必ずフック対象に含める |
-| deny リストの抜け | 定期的な監査 | 新しい秘密ファイル種別が増えたら deny に追加 |
+| deny リストの抜け | 定期的な監査 | 新しい秘密ファイル種別が増えたら deny・`pre-tool-use-router.sh`（`_sensitive_file_access`）・`.gitignore` 管理ブロック・`secret_scan.py` のファイル名ルールの 4 箇所を同時に更新する（一致の粒度は層ごとに違うが語彙は揃える・§1.6） |
+| 作業ツリーに置かれた秘密が git 履歴に入る | §1.6 の 5 検査点 + 自動保全コミットからの除外 | 名前・正規表現ベースのため、既知プレフィックスの無い値は代入形以外で素通りしうる。`--all` で定期監査する |
 
 ---
 

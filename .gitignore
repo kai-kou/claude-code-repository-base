@@ -30,10 +30,46 @@ node_modules/
 *.swp
 
 # Secrets / env
+# >>> claude-code-base: secrets (managed block) >>>
+# このマーカー区間は scripts/apply-to-repo.sh が下流リポジトリの .gitignore へ冪等に追記・更新する（Issue #678）。
+# 区間の中身はベース側で保守し、下流固有の除外はマーカーの外に書く。
+# permissions.deny（Read）・pre-tool-use-router.sh（Bash 読取）・tools/secret_scan.py（コミット/push 検知）と同じ語彙で
+# 書く（各層の一致粒度は違うため厳密な同一集合ではない。語を増減するときは 4 箇所を同時に更新する）。
 .env
 .env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.dist
 *.pem
 *.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+id_rsa
+id_rsa[-_.]*
+id_dsa
+id_dsa[-_.]*
+id_ecdsa
+id_ecdsa[-_.]*
+id_ed25519
+id_ed25519[-_.]*
+!*.pub
+credentials
+credentials.*
+*-credentials
+*-credentials.*
+*_credentials
+*_credentials.*
+!*credentials*.md
+service-account.json
+*service-account*.json
+.netrc
+.git-credentials
+.publish-secrets
+# <<< claude-code-base: secrets <<<
 .claude/worktrees/
 
 # エフェメラルなローカル DB ファイルを誤って commit しないための一般的な安全網
@@ -44,6 +80,5 @@ node_modules/
 *.sqlite3
 *.duckdb
 
-# 公開スナップショット抽出時の秘匿語リスト（publish-snapshot.sh が読む）。
-# 秘匿語そのものを追跡すると本末転倒なので必ず ignore する。雛形は .publish-secrets.example。
-.publish-secrets
+# 公開スナップショット抽出時の秘匿語リスト（publish-snapshot.sh が読む）は秘匿情報そのものなので
+# 上の管理ブロック（.publish-secrets）で ignore している。雛形は .publish-secrets.example。

@@ -73,6 +73,7 @@ modules:
       - post-pr-confirm-mark.sh   # PR 存在確認済みマーカー（stop-pr-check.sh の毎ターン差し戻しを抑止・#543）
       - post-tool-use-failure.sh
       - post-tool-use-validate.sh
+      - git-pre-commit.sh          # git 側 pre-commit（秘密検知・tools/install_git_hooks.sh が導入・#678）
     skills:
       - pr-review-watcher
       - self-reviewer
@@ -83,6 +84,9 @@ modules:
       - pr_review_heartbeat.sh
       - test_pr_confirm_marker.sh   # post-pr-confirm-mark.sh × stop-pr-check.sh の e2e（#543）
       - self_review_check.py
+      - secret_scan.py             # 秘密（トークン・鍵・認証情報）検知ゲートの共通実装（#678）
+      - install_git_hooks.sh       # .git/hooks/pre-commit の導入（冪等・#678）
+      - test_secret_scan.sh        # 秘密検知ゲート（スキャナ + フック配線）の回帰テスト（#678）
       - test_self_review_check.sh   # Layer 0 構文検査・対応テスト自動実行の回帰テスト（#627）
       - record_layer1_findings.py   # Layer 1 / PR 前レビューの結果を JSONL に追記（計測・#627 対策 E）
       - layer1_findings_report.py   # 同 JSONL の週次集計（指摘ゼロ PR 率・同種指摘候補・#627 対策 E）

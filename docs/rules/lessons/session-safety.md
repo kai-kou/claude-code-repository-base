@@ -40,3 +40,24 @@ PR は存在せず（GitHub API 404）、ファイルにも未反映だった。
 
 **判定基準**: 「マージした / 完了した」と書こうとした瞬間が発動トリガー。状態確認の単一コマンド結果を
 鵜呑みにしない。
+
+---
+
+## L-134: 自動保全コミット（`git add -A`）が作業ツリーの秘密を無差別に拾い、自律マージで main に到達する（2026-09-16・#678）
+
+**パターン**: 下流リポジトリでトークン・鍵・認証情報の誤コミットが多発。`pre-compact` / `post-compact` /
+`stop-slack-notify` の自動保全コミットと、ルール上の `git add .` / `git add -A` が未追跡ファイルを全件ステージし、
+自律 PR → 自動マージに人の目が無いためそのまま main へ到達する。ベース自身の main にも `id_rsa_test_tmp`
+（テスト残骸）が #592 の chore コミットに紛れて追跡されていた。
+
+**根本原因**: 秘密防御が「Claude に読ませない」側（`permissions.deny` / Bash 読取ガード）だけで、
+「git 履歴に入れない」側のゲートが皆無だった。`.gitignore` は `apply-to-repo.sh` の配布対象外で下流に届かず、
+ベース自身の秘密パターン（`.env` / `*.pem` / `*.key` の 3 つ）も deny リストの列挙と不整合だった。
+
+**対策**: `tools/secret_scan.py` を共通実装に、git pre-commit（全コミット経路）・PreToolUse（`git commit` /
+`git push` / MCP 直 push）・PR 作成前（`self_review_check.py`）の 5 検査点と、自動保全 3 フックでの検知パスの
+アンステージ。`.gitignore` の秘密パターンは管理ブロックとして `apply-to-repo.sh` が下流へ配布する。
+詳細は `security-posture-controls.md` §1.6、回帰検証は `bash tools/test_secret_scan.sh`。
+
+**判定基準**: 「秘密を読めない」統制を数えて安心しない。「作業ツリーに置かれた秘密が履歴に入るまでに
+止まる検査点はどこか」を答えられなければ未防御。ゲートに止められたら **無効化して通さず**、秘密を外す。

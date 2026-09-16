@@ -187,14 +187,14 @@ frontmatter は公式仕様（`name` / `description` 必須・`model` / `tools` 
 
 ## ハーネス（`.claude/hooks/`）
 
-配線は `.claude/settings.json`、実体は `.claude/hooks/*.sh`（全 23 スクリプト）。
+配線は `.claude/settings.json`（`git-pre-commit.sh` だけは git 自身のフックとして `.git/hooks/pre-commit` に配線・`tools/install_git_hooks.sh` が導入）、実体は `.claude/hooks/*.sh`（全 24 スクリプト）。
 役割グループのみ記す（各スクリプトの詳細・トグル環境変数は当該ファイル冒頭のコメントを参照）。
 
 | グループ | スクリプト | 役割 |
 |---|---|---|
 | 起動・復帰 | `session-start.sh` / `post-compact.sh` / `pre-compact.sh` | env 伝搬・gh 準備・作業ツリー整備・状態注入・圧縮前後の未コミット自動保存（L-100 防御）・symlink 同期 |
 | 入力ガード | `user-prompt-submit-guard.sh` / `prompt-structuring.sh` / `orchestrator-directive.sh` | 高リスク入力の助言注入・生指示の作業スペック展開・高コストモデル時のチーム組成指示（いずれも非ブロッキング） |
-| 実行ガード | `pre-tool-use-router.sh` → `pre-git-push-check.sh` / `pre-pr-create-check.sh`、`pre-merge-layer1-check.sh`、`permission-request-auto-allow.sh` | main 直 push ブロック・PR 作成前チェック・.env アクセスブロック・マージ直前の Layer 1 未観測nudge（非ブロッキング）・`.claude/` 配下の編集自動許可 |
+| 実行ガード | `pre-tool-use-router.sh` → `pre-git-push-check.sh` / `pre-pr-create-check.sh`、`pre-merge-layer1-check.sh`、`permission-request-auto-allow.sh`、`git-pre-commit.sh`（git 側 pre-commit・`tools/install_git_hooks.sh` が導入） | main 直 push ブロック・PR 作成前チェック・.env アクセスブロック・秘密（トークン・鍵）のコミット / push / MCP 直 push 検知（`tools/secret_scan.py`・#678）・マージ直前の Layer 1 未観測nudge（非ブロッキング）・`.claude/` 配下の編集自動許可 |
 | 事後検証 | `post-tool-use-validate.sh` / `post-merge-publish-check.sh` / `post-review-write-mark.sh` / `post-pr-confirm-mark.sh` / `post-tool-use-failure.sh` / `subagent-stop.sh` | 成果物バリデーション拡張点（既定 no-op）・main マージ直後の公開反映起動・Layer 1 セルフレビュー提出のマーカー記録・PR 存在確認済みのマーカー記録（`stop-pr-check.sh` の毎ターン差し戻しを抑止・#543）・gh プロキシ起因エラーの案内・サブエージェント異常終了の自己修正 |
 | 終了時 | `stop-router.sh` → `stop-git-check.sh` / `stop-pr-check.sh` / `stop-publish-check.sh` / `stop-slack-notify.sh` / `stop-completion-report-check.sh` | 未コミット/未 PR 検知・WIP 自動コミット・公開反映ドリフト検知・Slack 完了通知・完了報告フォーマットの是正リマインド |
 

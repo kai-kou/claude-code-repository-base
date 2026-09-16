@@ -14,6 +14,7 @@
 |---|---|---|---|
 | セッションを開くたび「main に直接 push しないで」「作業ブランチを切って」と言い直している | ルール一式が `.claude/rules/` に常駐し全セッションで自動読込される。自分でルールを書き起こす必要がない | 📋 | `CLAUDE.md` / `docs/rules/` / `.claude/rules/`（symlink） |
 | うっかり `main` へ push してしまう / 事故が怖くて自律実行させられない | `main` / `master` への直接 push が **物理的にブロック** される | 🔒 | `.claude/hooks/pre-git-push-check.sh` |
+| トークン・鍵・認証情報をうっかりコミット / push してしまう（自動コミットが `.env` 以外の秘密まで拾う） | コミット・push・MCP 直 push・PR 作成前の全経路で秘密を検知してブロックし、自動保全コミットは秘密ファイルを除外して保全する。`.gitignore` の秘密パターンもベースから配布される | 🔒 | `tools/secret_scan.py` / `.claude/hooks/git-pre-commit.sh` / `.claude/hooks/pre-tool-use-router.sh` |
 | `.env` や鍵ファイルを読ませてしまう事故が怖い | `.env`・秘密鍵・認証情報ファイルへのアクセスがブロックされる（`.env.example` 等のテンプレート名も含め一律ブロック）。Bash 経由はフック、Read / Write 経由は権限設定で二重に塞ぐ | 🔒 | `.claude/hooks/pre-tool-use-router.sh` / `.claude/settings.json` の `permissions.deny` |
 | 実装のたび「PR 作っていいですか」と聞かれ、レビューとマージを自分で追いかけている | 実装 → セルフレビュー → PR 作成 → 指摘対応 → マージまで、確認を挟まず進める運用ルールになっている | 📋 | `docs/rules/pr-review-flow-summary.md` / `pr-review-watcher`・`code-review`・`self-reviewer` スキル |
 | 未コミットのまま PR が作られて中身が空になる | 未コミット / 未 push 状態、セルフレビューの機械チェックが Error の状態では PR 作成がブロックされる | 🔒 | `.claude/hooks/pre-pr-create-check.sh` |

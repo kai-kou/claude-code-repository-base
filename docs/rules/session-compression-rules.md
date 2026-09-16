@@ -13,7 +13,7 @@
 | **会話内の口頭指示** | 圧縮により **失われる**（下記オートメモリの条件付き例外を除き、CLAUDE.md に書かれた指示のみ保持） |
 | **未コミットのファイル変更** | `PostCompact` フック（`post-compact.sh`）が自動コミット & push する |
 
-`PostCompact` は圧縮直後に未コミット変更を検出し、`main`/`master` 以外のブランチなら `git add -A && git commit && git push` する（圧縮後の SessionStart クリーンアップ `git checkout -- .` / `git clean -fd` が作業を消すことへの一次防御）。あわせて symlink 整合も自動修正する。
+`PostCompact` は圧縮直後に未コミット変更を検出し、`main`/`master` 以外のブランチなら一括ステージ（秘密の疑いがあるパスは除外して作業ツリーに残す・`security-posture-controls.md` §1.6）→ `git commit && git push` する（圧縮後の SessionStart クリーンアップ `git checkout -- .` / `git clean -fd` が作業を消すことへの一次防御）。あわせて symlink 整合も自動修正する。
 
 ## シンボリックリンク方式の運用ルール
 

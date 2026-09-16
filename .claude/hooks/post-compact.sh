@@ -16,6 +16,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=lib/secret_scan.sh
+source "$(dirname "$0")/lib/secret_scan.sh"
 
 # ルール同期状態のチェック（漏れがあれば自動修正）
 if [[ -x "$REPO_ROOT/tools/check_rules_sync.sh" ]]; then
@@ -48,7 +50,8 @@ if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
 
     if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ] && [ "${_skip_wip_commit:-false}" != "true" ]; then
       _timestamp=$(TZ="${PROJECT_TZ:-Asia/Tokyo}" date '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date '+%Y-%m-%d %H:%M')
-      git -C "$REPO_ROOT" add -A 2>/dev/null || true
+      # 一括ステージ後に秘密の疑いがあるパスをアンステージする（#678・作業は消えず秘密だけ乗せない）
+      stage_all_except_secrets "$REPO_ROOT"
       if git -C "$REPO_ROOT" commit -m "[wip] auto-commit before compaction (${_timestamp})"; then
         if git -C "$REPO_ROOT" push -u origin "$_branch"; then
           echo "[PostCompact] ✅ 未コミット変更を自動コミット＆プッシュしました（ブランチ: ${_branch}）" >&2

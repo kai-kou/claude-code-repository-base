@@ -128,6 +128,28 @@ def main():
     )
     args = parser.parse_args()
 
+    # Contents API は git を通らないため git pre-commit / push 前検査が効かない。送信前に自前で検査する（#678）。
+    # 検知（1）・実行エラー（2）とも送信しない（fail-closed。REST フォールバックは Claude 起動の経路で保全用途ではない）
+    scanner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secret_scan.py")
+    if os.environ.get("CLAUDE_BASE_DISABLE_SECRET_SCAN") != "1" and os.path.isfile(scanner):
+        import subprocess  # noqa: PLC0415  # フォールバック専用ツールのため必要時にだけ読み込む
+        existing = [p for p in args.path if os.path.exists(p)]
+        checks = []
+        if existing:
+            checks.append(subprocess.run([sys.executable, scanner, "--paths", *existing], capture_output=True, text=True))
+        # コミットメッセージも同じ PUT ペイロードで送信される（payload["message"]）ため、ファイル内容と同様に検査する
+        import json  # noqa: PLC0415
+        checks.append(subprocess.run(
+            [sys.executable, scanner, "--json"],
+            input=json.dumps({"path": "<commit-message>", "content": args.message}),
+            capture_output=True, text=True,
+        ))
+        for r in checks:
+            if r.returncode != 0:
+                print("❌ 秘密検知を通過しなかったため送信しません（#678）:", file=sys.stderr)
+                print((r.stdout + r.stderr).strip(), file=sys.stderr)
+                sys.exit(1)
+
     exit_code = 0
     for path in args.path:
         if not os.path.exists(path):

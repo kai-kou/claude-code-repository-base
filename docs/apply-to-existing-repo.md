@@ -71,6 +71,8 @@ bash apply-to-repo.sh --tz Asia/Tokyo --prune
 | `.claude/settings.json` | 上と同じ経路。加えて初回のみ `.claude/settings.json.pre-base.bak` に退避する（`--keep-settings` で同期自体を止められるが、ベースのフック更新も届かなくなる） |
 | ベースに存在しないファイル（下流が独自に足したルール・スキル・ツール） | **一切触らない**（同期はベース側にあるファイルだけを対象にするため） |
 | `CLAUDE.md` / `docs/project-mission.md` / `REVIEW.md` | **プロジェクト固有のため既定では上書きしない**。既存があれば維持し、ベース版を `*.base` として横に配置（差分を手動で取り込む）。`--overwrite-project` で上書き |
+| `.gitignore` | **マーカー区間（秘密パターンの管理ブロック）だけを冪等に追記・更新**。区間の外（下流固有の除外設定）は 1 文字も触らない（#678） |
+| `.git/hooks/pre-commit` | 秘密検知フックを導入する（`tools/install_git_hooks.sh`・冪等）。本ベース由来でない既存 pre-commit（husky 等）は上書きしない |
 
 ### 同期の 4 分岐（下流の変更が消えない仕組み）
 

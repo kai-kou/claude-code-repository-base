@@ -23,10 +23,12 @@
   個別判定に回るため、無人ルーティンでは ask に倒れた時点で停止する（下流で実発生）。
 
 射程と限界（過信しないこと）:
-  - コマンド名の列挙型で、`python3 -c "open('/etc/x','w')"` のような任意コード経由は塞げない
+  - コマンド名の列挙型で、`python3 -c "open('/etc/x','w')"` / `node -e` のような任意コード経由は塞げない
     （`pre-tool-use-router.sh` の機密ファイルガードと同じ設計上の限界。残余リスクはコンテナ隔離が引き受ける）。
-    保護パスについても同じで、`python3 -c` / `node -e` / `perl -i` / `awk -i inplace` 経由は素通りする
-    （2 つの独立実装で確認済み）。塞いだのは sed / cp / mv / ln / tee / リダイレクトの直書きであって根絶ではない
+    `perl -i`（結合フラグ形 `-pi` / `-ni` 等を含む）/ `awk` `gawk` の `-i inplace` は `sed -i` と
+    同型（インプレース編集フラグの列挙）なので塞いだ（#622）。`mawk` / `nawk` はこの拡張を持たない
+    ため対象にしていない。塞いだのは sed / perl / awk・gawk のインプレース編集・cp / mv / ln / tee /
+    リダイレクトの直書きであって、任意コード実行系（`-c` / `-e` のインラインコード評価）の根絶ではない
   - 解決できない変数（外部 env 由来）を含むパスは判定不能として素通りさせる（誤ブロックを避ける。
     同一コマンド内の `NAME=value` 代入は解決する）
   - 目的は「無人セッションの停止防止」であって権限の代替ではない。`permissions.deny` の保護とは独立
@@ -69,6 +71,27 @@ DEST_VALUE_FLAGS = {
     "curl": ("-o", "--output", "--output-dir"),
     "wget": ("-O", "--output-document", "-P", "--directory-prefix"),
 }
+# フラグが値を取るが、その値自体は書き込み先ではない（`awk -i inplace` の `inplace` は
+# gawk がロードする拡張モジュール名であってパスでもバックアップサフィックスでもない
+# （バックアップサフィックスは別途 `-v INPLACE_SUFFIX=...` で指定する）。消費しないと
+# operands[0] に紛れ込み、続くスクリプト引数を誤って書き換え対象扱いする・#622）。
+# `-i inplace` は GNU awk（gawk）の拡張で、`awk` コマンド名がそのまま gawk を指す環境
+# （多くの Linux ディストリビューションの既定）だけでなく `gawk` を明示的に呼ぶ書き方も
+# 実在するため両方を対象にする（Layer 1 セルフレビュー指摘。`mawk` / `nawk` はこの拡張を
+# 持たないため対象にしない・過剰検出の回避）
+SKIP_VALUE_FLAGS = {
+    "awk": ("-i",),
+    "gawk": ("-i",),
+}
+_AWK_NAMES = ("awk", "gawk")
+# perl の `-i` はインプレース編集フラグ（値を取らない。バックアップ拡張子は `-i.bak` のように
+# 同一トークンへ連結する）。`sed -i` と同型の判定を流用する（#622）。
+# **単独の `-i` だけでなく、他の単文字フラグと結合した形（`-pi` / `-ni` / `-npi.bak` 等）も
+# マッチさせる**: `perl -pi -e '...'` は `perl -i -pe '...'` と並ぶ最頻出のインプレース編集
+# イディオムで、単独形だけを見る実装は fail-open になる（Layer 1 セルフレビュー指摘・3 観点が
+# 独立に到達・#622）。`-i` を含む文字クラスの連続と、末尾のバックアップ拡張子（あれば）だけを
+# 要求する。長オプション（`--`）や `-I`（大文字・include path）は対象にしない
+_PERL_INPLACE = re.compile(r"^-[a-zA-Z]*i(\.\S*)?$")
 # 実コマンドの前に置かれ、読み飛ばしてよいラッパー
 COMMAND_WRAPPERS = {"sudo", "env", "nice", "ionice", "command", "exec", "builtin", "time", "timeout"}
 # セグメント区切りとして扱うトークン（`&>` はリダイレクトなので含めない）
@@ -328,6 +351,7 @@ def _write_targets(tokens: list[str]) -> list[str]:
 
     # 値が書き込み先になるフラグ（`-t DIR` / `--target-directory=DIR` / `curl -o FILE`）
     dest_flags = DEST_VALUE_FLAGS.get(name, ())
+    skip_flags = SKIP_VALUE_FLAGS.get(name, ())
     flag_dests: list[str] = []
     operands: list[str] = []
     i = 0
@@ -345,6 +369,8 @@ def _write_targets(tokens: list[str]) -> list[str]:
                     break
             if matched_value is not None:
                 flag_dests.append(matched_value)
+            elif arg in skip_flags and i + 1 < len(args):
+                consumed = 2  # 値は書き込み先でも operand でもないので読み飛ばすだけ
             i += consumed
             continue
         operands.append(arg)
@@ -356,6 +382,13 @@ def _write_targets(tokens: list[str]) -> list[str]:
         targets.extend(a[len("of="):] for a in args if a.startswith("of="))
     elif name == "sed" and any(a.startswith("-i") and not a.startswith("--") for a in args):
         # `sed -i 's/a/b/' file...` — 最初の非フラグ引数はスクリプト、残りが書き換え対象
+        targets.extend(operands[1:])
+    elif name == "perl" and any(_PERL_INPLACE.match(a) for a in args):
+        # `perl -i -pe 's/a/b/' file...` — sed -i と同型（#622）
+        targets.extend(operands[1:])
+    elif name in _AWK_NAMES and any(a == "-i" for a in args):
+        # `awk -i inplace '{...}' file...` / `gawk -i inplace ...` — `-i` の値（inplace）は
+        # SKIP_VALUE_FLAGS で読み飛ばし済みなので、operands は [script, file...] になっている（#622）
         targets.extend(operands[1:])
     elif name in WRITE_ALL_ARGS:
         targets.extend(operands)
@@ -560,6 +593,20 @@ def _self_test() -> int:
         (True, 'echo x > .claude/rules/new.md'),  # symlink 以外の .claude/rules 書き込みは保護
         (True, 'cd .claude/hooks && cd .. && sed -i "s/a/b/" hooks/x.sh'),  # cd .. 追従
         (True, 'ln -sf ../../docs/rules/x.md .claude/rules/x.md && sed -i "s/a/b/" .claude/hooks/x.sh'),
+        # --- perl -i / awk -i inplace（#622・sed -i と同型の取りこぼしを塞ぐ） ---
+        (True, 'perl -i -pe "s/a/b/" .claude/hooks/x.sh'),
+        (True, 'perl -i.bak -pe "s/a/b/" .claude/hooks/x.sh'),
+        (True, 'awk -i inplace "{gsub(/a/,\\"b\\")}1" .claude/hooks/x.sh'),
+        (True, 'perl -i -pe "s/a/b/" /etc/demo.conf'),  # 保護パス以外への外部書き込みも従来どおり検出
+        (True, 'perl -pi -e "s/a/b/" .claude/hooks/x.sh'),  # 結合フラグ形（最頻出イディオム・Layer 1 指摘）
+        (True, 'perl -ni -e "print" .claude/hooks/x.sh'),  # 結合フラグ形（-n + -i）
+        (True, 'perl -pi.bak -e "s/a/b/" .claude/hooks/x.sh'),  # 結合フラグ + バックアップ拡張子
+        (False, 'perl -pe "s/a/b/" .claude/hooks/x.sh'),  # -i 無しは読み取りのみ（標準出力）
+        (False, 'awk "{print}" .claude/hooks/x.sh'),  # -i inplace 無しは読み取りのみ
+        (False, 'perl -e "print 1"'),  # ファイル引数なし・-i 無し
+        (False, 'perl -Ilib -e "print 1" .claude/hooks/x.sh'),  # -I（大文字・include path）は対象外
+        (True, 'gawk -i inplace "{gsub(/a/,\\"b\\")}1" .claude/hooks/x.sh'),  # gawk 明示呼び出し（Layer 1 指摘）
+        (False, 'gawk "{print}" .claude/hooks/x.sh'),  # -i inplace 無しは対象外
         (False, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),  # cd - は判定不能（素通り・見逃しを承知で誤断定より安全側）
         (False, f'sed -i "s/a/b/" /tmp/claude-0/proj/{sid}/scratchpad/lab/.claude/hooks/dummy.sh'),  # scratchpad のラボは対象外
         (False, f'cd /tmp/claude-0/proj/{sid}/scratchpad/lab && echo x >> .git/info/exclude'),

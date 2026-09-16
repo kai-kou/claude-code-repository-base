@@ -21,6 +21,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=lib/secret_scan.sh
+source "$(dirname "$0")/lib/secret_scan.sh"
 
 # クラウド環境（CLAUDE_CODE_REMOTE=true）かつ main/master 以外のブランチで
 # 未コミット変更がある場合のみ WIP コミットする。ローカルではクリーンアップが
@@ -37,7 +39,8 @@ if [[ "${CLAUDE_CODE_REMOTE:-}" = "true" ]]; then
       echo "[PreCompact] ブランチ '${_branch}' はマージ済みのため [wip] コミットをスキップします" >&2
     elif [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
       _timestamp=$(TZ="${PROJECT_TZ:-Asia/Tokyo}" date '+%Y-%m-%d %H:%M %Z' 2>/dev/null || date '+%Y-%m-%d %H:%M')
-      git -C "$REPO_ROOT" add -A 2>/dev/null || true
+      # 一括ステージ後に秘密の疑いがあるパスをアンステージする（#678・作業は消えず秘密だけ乗せない）
+      stage_all_except_secrets "$REPO_ROOT"
       if git -C "$REPO_ROOT" commit -m "[wip] auto-commit before compaction starts (${_timestamp})"; then
         if git -C "$REPO_ROOT" push -u origin "$_branch"; then
           echo "[PreCompact] ✅ 圧縮前に未コミット変更を自動コミット＆プッシュしました（ブランチ: ${_branch}）" >&2

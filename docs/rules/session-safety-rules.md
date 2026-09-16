@@ -84,3 +84,5 @@ git commit -m "[wip] ユーザー確認待ち（{概要}）"
 git push -u origin {ブランチ名}
 # push 完了後にユーザーへの確認メッセージを送る
 ```
+
+`git add .` が秘密（`.env` / 鍵 / トークン）を拾っても、コミット・push 時の秘密検知ゲート（`security-posture-controls.md` §1.6）が止める。止まったら該当ファイルを `.gitignore` へ入れて `git rm --cached` し、秘密を外してから再実行する（検知を無効化して通さない）。

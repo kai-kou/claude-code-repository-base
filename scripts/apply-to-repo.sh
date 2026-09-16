@@ -42,6 +42,10 @@
 #       ④ 衝突・検証失敗・祖先なし → 下流を温存し、ベース最新を <path>.base-latest に併置
 #     と振り分ける。衝突マーカーはワークツリーに一切書かない（壊れた settings.json で
 #     下流のセッションが起動不能になる／ルールが壊れた形で読まれる、という失敗を構造的に断つ）。
+#   - 祖先 SHA が失効しても（ベース側の force-push / filter-branch）、マーカーの applied_at から
+#     近似の祖先を解決してマージを続ける。それも取れない場合は上書きに落とさず下流を温存する。
+#     初回適用・ベース切替・--no-merge で上書きしたファイルは「何を失ったか」を必ず一覧報告する
+#     （黙って消えるのを構造的に無くす・Issue #233）。
 set -euo pipefail
 
 BASE_REPO="kai-kou/claude-code-repository-base"
@@ -388,27 +392,83 @@ fi
 # --- 3. 適用（対象パスの定義は 2.5 の直前を参照）---
 # --- 3.1 祖先（前回適用したベース）の解決 ---
 # show_updates() が既に必要な深掘りフェッチを済ませているので、ここでは到達性の確認だけ行う。
-# 到達できない理由（マーカー無し・ベース切替・force-push・ネットワーク不通）は
-# いずれも「祖先を使えない」という 1 つの結論に落ちるため、区別せず 2 方向コピーへ degrade する。
+# 祖先が取れない理由は「意図した操作」と「非意図的な履歴断絶」で扱いを分ける（Issue #233）:
+#   - 初回適用（マーカー無し）・ベース切替（--base 変更）・--no-merge → 上書きするが、
+#     内容が異なる既存ファイルは一覧に残して報告する（黙って消さない）
+#   - force-push / filter-branch 等でマーカー SHA が失効 → まず applied_at による
+#     日時フォールバックで祖先を解決し、それも取れなければ下流を温存する（history-lost）
 PREV_SHA=""
+PREV_SHA_SOURCE=""      # marker | date-fallback
+ANCESTORLESS_MODE=""    # "" = 祖先あり / first-run / base-switch / no-merge / history-lost
+
+# マーカーの applied_at から祖先候補を解決する（ベース履歴が書き換えられて SHA が失効しても
+# 「その日時に下流が受け取っていたベースの中身」に最も近いコミットをマージベースにできる）。
+resolve_prev_sha_by_date() {
+  local applied_at cand
+  applied_at="$(json_field "$STATE_FILE" applied_at)"
+  [ -n "$applied_at" ] || return 1
+  # 日時形式の検証（壊れた値を git へ渡すと --before が無言で無視され HEAD が返る＝誤った祖先）
+  case "$applied_at" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]*) : ;;
+    *) return 1 ;;
+  esac
+  # 桁数パターンは `2026-13-45T99:99:99` のような値域外も通してしまう。GNU date が使える環境では
+  # 値域まで検証する（使えない環境は下の HEAD 一致拒否が同じ失敗モードを受け止める）
+  if date --version >/dev/null 2>&1; then
+    date -d "$applied_at" +%s >/dev/null 2>&1 || return 1
+  fi
+  cand="$(git -C "$CLONE_DIR" rev-list -1 --before="$applied_at" HEAD 2>/dev/null || true)"
+  if [ -z "$cand" ]; then
+    # 浅い clone では履歴が届かず空になる。深掘りしてから 1 度だけ再試行する
+    git -C "$CLONE_DIR" fetch --deepen 500 origin >/dev/null 2>&1 || true
+    cand="$(git -C "$CLONE_DIR" rev-list -1 --before="$applied_at" HEAD 2>/dev/null || true)"
+  fi
+  [ -n "$cand" ] || return 1
+  # HEAD 自身は祖先になりえない。これを採用すると全ファイルが「ベース側に更新なし」と判定され、
+  # 同期が何も起きないまま「祖先を解決しました」という成功ログだけが出る（無言の no-op）
+  [ "$cand" != "$BASE_HEAD" ] || return 1
+  PREV_SHA="$cand"
+  PREV_SHA_SOURCE="date-fallback"
+  return 0
+}
+
 resolve_prev_sha() {
-  $NO_MERGE && { log "3 方向マージを無効化（--no-merge）: 全ファイルを上書きします"; return; }
-  [ -f "$STATE_FILE" ] || { log "前回適用マーカーが無いため、今回は上書き同期します（次回から下流の変更を保護します）"; return; }
+  $NO_MERGE && { ANCESTORLESS_MODE="no-merge"; log "3 方向マージを無効化（--no-merge）: 全ファイルを上書きします"; return; }
+  [ -f "$STATE_FILE" ] || { ANCESTORLESS_MODE="first-run"; log "前回適用マーカーが無いため、今回は上書き同期します（次回から下流の変更を保護します）"; return; }
   local sha prev_base
   sha="$(json_field "$STATE_FILE" commit)"
   prev_base="$(json_field "$STATE_FILE" base_repo)"
   if [ -n "$prev_base" ] && [ "$prev_base" != "$BASE_REPO" ]; then
+    ANCESTORLESS_MODE="base-switch"
     log "ベースが前回と異なるため祖先を使いません（$prev_base → $BASE_REPO）: 上書き同期します"
     return
   fi
-  [ -n "$sha" ] || { log "マーカーに commit が無いため上書き同期します"; return; }
+  if [ -z "$sha" ]; then
+    # commit が壊れていても applied_at が生きていれば祖先を取れる
+    if resolve_prev_sha_by_date; then
+      log "マーカーに commit が無いため、適用日時から祖先を解決しました: ${PREV_SHA:0:7}（近似）"
+    else
+      ANCESTORLESS_MODE="history-lost"
+      log "マーカーに commit も有効な applied_at も無いため、祖先を解決できません"
+    fi
+    return
+  fi
   if ! have_commit "$sha"; then
     git -C "$CLONE_DIR" fetch --deepen 500 origin >/dev/null 2>&1 || true
   fi
   if have_commit "$sha"; then
     PREV_SHA="$sha"
+    PREV_SHA_SOURCE="marker"
+    return
+  fi
+  # SHA 失効（force-push / filter-branch / 取得範囲外）→ 日時フォールバック
+  if resolve_prev_sha_by_date; then
+    log "前回適用コミット（${sha:0:7}）に到達できないため、適用日時から祖先を解決しました: ${PREV_SHA:0:7}（近似）"
+    log "（近似のため誤マージのリスクがあります。マージ結果は必ず diff で確認してください）"
   else
-    log "前回適用コミット（${sha:0:7}）に到達できないため上書き同期します（下流の変更は .base-latest で保護されません）"
+    ANCESTORLESS_MODE="history-lost"
+    log "前回適用コミット（${sha:0:7}）に到達できず、適用日時からも祖先を解決できませんでした"
+    log "（下流の変更を守るため、ベースと内容が異なるファイルは上書きせず .base-latest に併置します）"
   fi
 }
 if ! command -v python3 >/dev/null 2>&1; then
@@ -421,8 +481,8 @@ MERGE_HELPER="$CLONE_DIR/tools/merge_three_way.py"
 [ -f "$MERGE_HELPER" ] || MERGE_HELPER="$TARGET/tools/merge_three_way.py"
 
 # 適用サマリー用のカウンタと一覧（最後に必ず報告する）
-N_SKIPPED=0; N_COPIED=0; N_MERGED=0; N_CONFLICT=0; N_DELETED=0
-MERGED_LIST=""; CONFLICT_LIST=""; DELETED_LIST=""
+N_SKIPPED=0; N_COPIED=0; N_MERGED=0; N_CONFLICT=0; N_DELETED=0; N_OVERWRITTEN=0
+MERGED_LIST=""; CONFLICT_LIST=""; DELETED_LIST=""; OVERWRITTEN_LIST=""
 
 place_file() {  # $1=src $2=dst（属性を保って配置する）
   mkdir -p "$(dirname "$2")"
@@ -441,8 +501,28 @@ sync_file() {
   local src="$CLONE_DIR/$rel" dst="$TARGET/$rel"
   local anc merged
 
-  # 祖先が使えない / symlink（行ベースのマージ対象外）→ そのまま配置する
+  # 祖先が使えない / symlink（行ベースのマージ対象外）→ そのまま配置する。
+  # ただし「祖先なしで既存の下流ファイルをベース版に置き換える」のは、下流の固有カスタムが
+  # 黙って消える経路そのもの（Issue #233）。内容差分があるものは必ず可視化する。
   if [ -z "$PREV_SHA" ] || [ -L "$src" ] || [ -L "$dst" ]; then
+    if [ ! -L "$src" ] && [ ! -L "$dst" ] && [ -e "$dst" ] && ! cmp -s "$src" "$dst"; then
+      # 非意図的な履歴断絶（SHA 失効かつ日時フォールバックも不成立）では上書きしない。
+      # 下流を温存し、ベース最新は .base-latest に併置して人が判断できる形で残す。
+      if [ "$ANCESTORLESS_MODE" = "history-lost" ]; then
+        if $DRY_RUN; then
+          log "  ~ would keep local（祖先解決不能）, save base as $rel.base-latest"
+        else
+          place_file "$src" "$dst.base-latest"
+        fi
+        N_CONFLICT=$((N_CONFLICT + 1)); CONFLICT_LIST="${CONFLICT_LIST}${rel}（祖先解決不能のため温存）"$'\n'
+        return
+      fi
+      # 初回適用・ベース切替・--no-merge は意図した上書き。何を失うかを一覧に残す
+      if $DRY_RUN; then log "  ~ would OVERWRITE local changes: $rel"; else place_file "$src" "$dst"; fi
+      N_OVERWRITTEN=$((N_OVERWRITTEN + 1)); OVERWRITTEN_LIST="${OVERWRITTEN_LIST}${rel}"$'\n'
+      N_COPIED=$((N_COPIED + 1))
+      return
+    fi
     if $DRY_RUN; then log "  ~ would place: $rel"; else place_file "$src" "$dst"; fi
     N_COPIED=$((N_COPIED + 1))
     return
@@ -497,8 +577,13 @@ sync_file() {
       return
     fi
     # ③ 両側が変更 → 3 方向マージ（クリーン + 検証通過のときだけ採用）
+    #
+    # ただし祖先が日時フォールバックによる近似のときはマージしない。近似祖先は内容の裏付けが無く
+    # （ベース履歴が書き換えられた状況でしか発動しない）、誤った祖先でのクリーンマージは
+    # 下流の変更を衝突マーカーも出さずに巻き戻す。両側が変更されたファイルは人の判断へ回す。
     merged="$TMP/merged.out"
-    if [ -f "$MERGE_HELPER" ] && python3 "$MERGE_HELPER" \
+    if [ "$PREV_SHA_SOURCE" != "date-fallback" ] \
+      && [ -f "$MERGE_HELPER" ] && python3 "$MERGE_HELPER" \
         --ours "$dst" --base "$anc" --theirs "$src" --output "$merged" --path-hint "$rel" 2>/dev/null; then
       if $DRY_RUN; then log "  ~ would merge: $rel"; else place_file "$merged" "$dst"; fi
       N_MERGED=$((N_MERGED + 1)); MERGED_LIST="${MERGED_LIST}${rel}"$'\n'
@@ -538,8 +623,48 @@ copy_path() {
   log "  + $rel（更新 $((N_COPIED - b_copy)) / マージ $((N_MERGED - b_merge)) / 要確認 $((N_CONFLICT - b_conf)) / 触れず $((N_SKIPPED - b_skip))）"
 }
 
+# 祖先が使えないモードでは、同期を始める前に「ローカル改変があり上書きされるファイル」を
+# 一覧表示する（Issue #233 完了条件 1）。サマリーの事後報告だけでは、実行を止めて中身を
+# 確認する余地が無く、気づいたときには上書きが終わっている。
+prescan_overwrites() {
+  [ -z "$PREV_SHA" ] || return 0
+  case "$ANCESTORLESS_MODE" in
+    first-run|base-switch|no-merge) : ;;   # 上書きする経路だけが対象
+    *) return 0 ;;                          # history-lost は温存するので上書きされない
+  esac
+  local p src dst f rel n=0 list=""
+  for p in "${SYNC_PATHS[@]}"; do
+    src="$CLONE_DIR/$p"
+    [ -e "$src" ] || continue
+    if [ -d "$src" ]; then
+      while IFS= read -r -d '' f; do
+        rel="$p/${f#"$src"/}"
+        dst="$TARGET/$rel"
+        [ -L "$f" ] && continue
+        [ -L "$dst" ] && continue
+        [ -e "$dst" ] || continue
+        if ! cmp -s "$f" "$dst"; then
+          list="${list}${rel}"$'\n'; n=$((n + 1))
+        fi
+      done < <(find "$src" \( -type f -o -type l \) -print0)
+    else
+      dst="$TARGET/$p"
+      if [ -e "$dst" ] && [ ! -L "$src" ] && [ ! -L "$dst" ] && ! cmp -s "$src" "$dst"; then
+        list="${list}${p}"$'\n'; n=$((n + 1))
+      fi
+    fi
+  done
+  [ "$n" -gt 0 ] || return 0
+  echo ""
+  log "⚠ 祖先が使えないため（$ANCESTORLESS_MODE）、次の ${n} 件は下流の変更ごとベース版で上書きされます:"
+  printf '%s' "$list" | while IFS= read -r x; do [ -n "$x" ] && printf '[apply]     %s\n' "$x"; done
+  log "  → 中止するなら Ctrl-C。差分を確認するには --dry-run を付けて実行してください"
+  echo ""
+}
+
 log "── ルール・スキル・ハーネスを同期 ──"
 resolve_prev_sha
+prescan_overwrites
 # modules.yaml も通常の sync_file（guard → fast-forward → 3方向マージ → 衝突退避）に乗る。
 # 下流の enabled:false / project: 値は、ベースが無変更なら guard で一切触れられず、
 # ベースが変更した場合も 3 方向マージが下流の変更行をそのまま保持する（Issue #509）。
@@ -579,6 +704,61 @@ if [ -f "$SETTINGS_SRC" ]; then
   fi
 fi
 
+# --- 4.5 .gitignore の秘密パターン（管理ブロック・Issue #678）---
+# ベースの .gitignore にあるマーカー区間だけを下流の .gitignore へ冪等に追記・更新する。
+# .gitignore 全体は下流固有のため SYNC_PATHS には載せない（丸ごと上書きすると下流の除外設定が消える）。
+# 下流でトークン・鍵の誤コミットが多発した根本原因の 1 つが「ベースの ignore パターンが下流に届いて
+# いなかった」ことなので、ここは opt-out 不可の同期にする（区間の外は一切触らない）。
+log "── .gitignore 秘密パターン（管理ブロック）──"
+GI_BEGIN='# >>> claude-code-base: secrets (managed block) >>>'
+GI_END='# <<< claude-code-base: secrets <<<'
+gi_block=$(awk -v b="$GI_BEGIN" -v e="$GI_END" '$0==b{f=1} f{print} $0==e{f=0}' "$CLONE_DIR/.gitignore" 2>/dev/null || true)
+if [ -z "$gi_block" ]; then
+  log "  - ベースの .gitignore に管理ブロックが無いためスキップ"
+else
+  gi_dst="$TARGET/.gitignore"
+  if $DRY_RUN; then
+    log "  ~ would merge managed secrets block into .gitignore"
+  else
+    gi_tmp=$(mktemp)
+    if [ -f "$gi_dst" ] && grep -qxF "$GI_BEGIN" "$gi_dst" && ! grep -qxF "$GI_END" "$gi_dst"; then
+      # BEGIN だけあって END が無い（手編集で壊れた）状態で置換すると BEGIN 以降を末尾まで消してしまうため触らない
+      log "  ⚠ .gitignore の管理ブロックに終端マーカー（${GI_END}）が無いため更新を見送りました。手で終端行を戻してから再実行してください"
+      gi_tmp=""
+    elif [ -f "$gi_dst" ] && grep -qxF "$GI_BEGIN" "$gi_dst"; then
+      # 既存ブロックを同じ位置で置換（区間の外は 1 文字も変えない）。ブロック本文は環境変数経由で渡す
+      # （awk -v はバックスラッシュを解釈するため）
+      GI_BLOCK="$gi_block" awk -v b="$GI_BEGIN" -v e="$GI_END" '
+        $0==b { print ENVIRON["GI_BLOCK"]; skip=1; next }
+        skip && $0==e { skip=0; next }
+        !skip { print }' "$gi_dst" > "$gi_tmp"
+      gi_action="更新"
+    else
+      {
+        if [ -f "$gi_dst" ]; then
+          cat "$gi_dst"
+          # 末尾改行が無ければ補い、既存内容と 1 行空ける
+          [ -z "$(tail -c1 "$gi_dst" 2>/dev/null)" ] || echo
+          echo
+        fi
+        printf '%s\n' "$gi_block"
+      } > "$gi_tmp"
+      gi_action="追記"
+    fi
+    if [ -z "$gi_tmp" ]; then
+      :
+    elif [ -f "$gi_dst" ] && cmp -s "$gi_tmp" "$gi_dst"; then
+      rm -f "$gi_tmp"
+      log "  = .gitignore（管理ブロックは最新）"
+    else
+      mv "$gi_tmp" "$gi_dst"
+      log "  + .gitignore（秘密パターン管理ブロックを${gi_action}）"
+    fi
+    unset gi_tmp gi_action
+  fi
+fi
+unset gi_block gi_dst
+
 # --- 5. プロジェクト固有ファイル（既存は保護）---
 log "── プロジェクト固有ファイル ──"
 for p in "${PROTECT_PATHS[@]}"; do
@@ -605,11 +785,26 @@ print_sync_summary() {
   echo ""
   log "── 同期サマリー ──"
   if [ -n "$PREV_SHA" ]; then
-    log "  祖先: ${PREV_SHA:0:7}（前回適用したベース）"
+    if [ "$PREV_SHA_SOURCE" = "date-fallback" ]; then
+      log "  祖先: ${PREV_SHA:0:7}（適用日時からの近似・マーカーの SHA は失効）"
+    else
+      log "  祖先: ${PREV_SHA:0:7}（前回適用したベース）"
+    fi
   else
-    log "  祖先: 未使用（上書き同期）"
+    case "$ANCESTORLESS_MODE" in
+      first-run)    log "  祖先: 未使用（初回適用のため上書き同期）";;
+      base-switch)  log "  祖先: 未使用（ベース切替のため上書き同期）";;
+      no-merge)     log "  祖先: 未使用（--no-merge 指定のため上書き同期）";;
+      history-lost) log "  祖先: 解決不能（ベース履歴の断絶。差分のあるファイルは上書きせず温存）";;
+      *)            log "  祖先: 未使用（上書き同期）";;
+    esac
   fi
   log "  触れず（ベース側に更新なし）: $N_SKIPPED / 配置・更新: $N_COPIED / マージ: $N_MERGED / 要確認: $N_CONFLICT / 削除を尊重: $N_DELETED"
+  if [ -n "$OVERWRITTEN_LIST" ]; then
+    log "  ⚠ 祖先が無いため、下流の変更ごとベース版で上書きしたファイル（${N_OVERWRITTEN} 件）:"
+    printf '%s' "$OVERWRITTEN_LIST" | while IFS= read -r o; do [ -n "$o" ] && printf '[apply]     %s\n' "$o"; done
+    log "  → 固有カスタムが含まれていた場合は git diff で確認し、必要な分を復元してください"
+  fi
   if [ -n "$DELETED_LIST" ]; then
     log "  下流で削除済みのため復活させなかったファイル（意図した無効化ならこのままで正しい）:"
     printf '%s' "$DELETED_LIST" | while IFS= read -r x; do [ -n "$x" ] && printf '[apply]     %s\n' "$x"; done
@@ -645,6 +840,13 @@ else
   [ -x "$TARGET/tools/check_rules_sync.sh" ] && bash "$TARGET/tools/check_rules_sync.sh" --fix || true
 fi
 
+# --- 6.2 git pre-commit フック（秘密検知）の導入（Issue #678）---
+# .git/hooks/ は追跡されないため、配布物（.claude/hooks/git-pre-commit.sh）を置くだけでは効かない。
+# クラウドは session-start.sh が毎セッション導入するが、ローカルのクローンにはここで導入する（冪等）。
+if [ -f "$TARGET/tools/install_git_hooks.sh" ]; then
+  ( cd "$TARGET" && bash tools/install_git_hooks.sh ) 2>&1 | sed 's/^/[apply] /' >&2 || true
+fi
+
 # --- 6.5 同期マーカーの記録（次回のアップデート確認の基準点）---
 json_escape() {  # $1=value → \ と " をエスケープ（--base/--ref の任意文字列が JSON を壊すのを防ぐ）
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
@@ -672,7 +874,8 @@ echo ""
 log "✅ 適用完了: $TARGET_SLUG"
 echo "  - ルール     : docs/rules/ + .claude/rules/（symlink）"
 echo "  - スキル     : .claude/skills/"
-echo "  - ハーネス   : .claude/hooks/ + .claude/settings.json"
+echo "  - ハーネス   : .claude/hooks/ + .claude/settings.json + .git/hooks/pre-commit（秘密検知）"
+echo "  - .gitignore : 秘密パターンの管理ブロック（マーカー区間のみ・区間外は不変）"
 echo "  - エージェント: .claude/agents/ / コマンド: .claude/commands/"
 echo ""
 echo "注意: 配布されたルール・スキル本文中の Issue/PR 番号（例: Issue #123）は"

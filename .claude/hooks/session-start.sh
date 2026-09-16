@@ -282,6 +282,13 @@ if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     && echo "origin/${_default_branch}: fetched (refspec)" >&2 \
     || echo "⚠ Failed to fetch origin/${_default_branch}." >&2
   unset _default_branch
+
+  # --- git pre-commit フック（秘密検知）の導入（Issue #678）---
+  # クローンは毎セッション使い捨てで .git/hooks/ は空のため、起動のたびに導入する（冪等）。
+  # 自動保全コミット・Bash の `git add -A && git commit` 連結を含む全コミット経路の検査点になる。
+  if [ -f "${PROJECT_DIR}/tools/install_git_hooks.sh" ]; then
+    ( cd "$PROJECT_DIR" && bash tools/install_git_hooks.sh ) 2>&1 | sed 's/^/[session-start] /' >&2 || true
+  fi
 fi
 unset _skip_cleanup
 

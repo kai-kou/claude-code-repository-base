@@ -44,7 +44,7 @@ git clean -fd -e "assets/" -e "content/pipeline-state/"         # 未追跡フ�
 1. クラウド環境（`CLAUDE_CODE_REMOTE=true`）であることを確認（ローカルではスキップ）
 2. `main`/`master` 以外のブランチであることを確認
 3. 未コミット変更（追跡済み変更・ステージ済み変更・未追跡ファイル）を検出
-4. `git add -A` → `git commit -m "[wip] 圧縮前自動コミット（YYYY-MM-DD HH:MM JST）"` → `git push`
+4. `git add -A`（秘密の疑いがあるパスは `secret_scan.py` の検知でアンステージし作業ツリーに残す・stderr に警告・#678）→ `git commit -m "[wip] 圧縮前自動コミット（YYYY-MM-DD HH:MM JST）"` → `git push`
 5. 成功したことを stdout（セッションコンテキスト）に出力
 
 これにより、次セッションの SessionStart クリーンアップが走っても作業内容がリモートに保存済みとなる。

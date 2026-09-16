@@ -98,8 +98,14 @@
       "Read(**/*.pem)",
       "Read(**/*.key)",
       "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/*.jks)",
+      "Read(**/*.keystore)",
+      "Read(**/*.ppk)",
       "Read(**/credentials*)",
       "Read(**/id_rsa)",
+      "Read(**/id_dsa)",
+      "Read(**/id_ecdsa)",
       "Read(**/id_ed25519)",
       "Read(**/.aws/**)",
       "Read(**/*service-account*.json)",
@@ -156,7 +162,7 @@
       { "matcher": "Read|Write|Edit|NotebookEdit", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/permission-request-auto-allow.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash|mcp__github__create_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-router.sh" } ] },
+      { "matcher": "Bash|mcp__github__create_pull_request|mcp__github__push_files|mcp__github__create_or_update_file", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-tool-use-router.sh" } ] },
       { "matcher": "mcp__github__merge_pull_request", "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-merge-layer1-check.sh" } ] }
     ],
     "PostToolUse": [

@@ -96,6 +96,30 @@ run_case ALLOW "scratchpad 内のラボの .claude は対象外" \
 run_case ALLOW "前置きトグルで .git 配下の復旧操作を通す" \
   'CLAUDE_BASE_DISABLE_WORKSPACE_WRITE_GUARD=1 rm -f .git/index.lock'
 
+echo "[test] perl -i / awk -i inplace（#622・sed -i と同型の取りこぼしを塞ぐ）"
+run_case BLOCK "perl -i でリポジトリ内の保護パスを書き換える" \
+  'perl -i -pe "s/a/b/" .claude/hooks/x.sh'
+run_case BLOCK "perl -i にバックアップ拡張子が付いていても検出する" \
+  'perl -i.bak -pe "s/a/b/" .claude/hooks/x.sh'
+run_case BLOCK "awk -i inplace でリポジトリ内の保護パスを書き換える" \
+  'awk -i inplace "{gsub(/a/,\"b\")}1" .claude/hooks/x.sh'
+run_case BLOCK "perl -i は作業ツリー外の書き換えも従来どおり検出する" \
+  'perl -i -pe "s/a/b/" /etc/demo.conf'
+run_case BLOCK "perl の結合フラグ形 -pi（最頻出イディオム・Layer 1 指摘）" \
+  'perl -pi -e "s/a/b/" .claude/hooks/x.sh'
+run_case BLOCK "perl の結合フラグ形 -ni" \
+  'perl -ni -e "print" .claude/hooks/x.sh'
+run_case ALLOW "-i の無い perl は標準出力のみ（対象外）" \
+  'perl -pe "s/a/b/" .claude/hooks/x.sh'
+run_case ALLOW "-i inplace の無い awk は標準出力のみ（対象外）" \
+  'awk "{print}" .claude/hooks/x.sh'
+run_case ALLOW "perl -I（大文字・include path）は対象外" \
+  'perl -Ilib -e "print 1" .claude/hooks/x.sh'
+run_case BLOCK "gawk 明示呼び出しの -i inplace（Layer 1 指摘）" \
+  'gawk -i inplace "{gsub(/a/,\"b\")}1" .claude/hooks/x.sh'
+run_case ALLOW "-i inplace の無い gawk は標準出力のみ（対象外）" \
+  'gawk "{print}" .claude/hooks/x.sh'
+
 echo "[test] 通すべきケース"
 run_case ALLOW "自セッションの scratchpad への書き込み" \
   "mkdir -p /tmp/claude-0/demo/$TEST_SESSION/scratchpad && echo hi > /tmp/claude-0/demo/$TEST_SESSION/scratchpad/a.txt"
