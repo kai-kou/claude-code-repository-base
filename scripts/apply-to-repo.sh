@@ -209,6 +209,7 @@ SYNC_PATHS=(
   ".claude-plugin/plugin.json"
   "tools"
   "scripts"
+  "docs/jev-integration.md"   # TypeSafe Jev 活用ガイド（tools/jev_client.py の判断基準 SSOT・下流はここを読み替える）
   "modules.yaml"
   ".mcp.json"
   "requirements.txt"

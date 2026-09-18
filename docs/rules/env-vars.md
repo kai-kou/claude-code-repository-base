@@ -172,8 +172,9 @@ gh variable delete SLACK_BOT_TOKEN -R __OWNER__/__REPO__
 | `SLACK_PUBLISH_CHANNEL_ID` | 公開・マーケティング専用チャンネルID（publish 通知の送信先。未設定時は `SLACK_APPROVAL_CHANNEL_ID` にフォールバック） | 推奨 | `C0ZZZZZZZZZ` |
 | `SLACK_CODE_CHANNEL_ID` | コード関連通知専用チャンネルID（将来予約。現時点では `slack_notify.py` に実装なし。未設定でも動作に影響なし） | 任意 | `C0WWWWWWWWW` |
 | `SLACK_MENTION_USER_ID` | `approval` / `waiting` / `publish` 通知でメンションするユーザーID（未設定時はメンションなし） | △ | `U0XXXXXXXXX` |
+| `JEV_KEY` | TypeSafe Jev（System One モデル）の API キー。通知トリアージの言い換え補完（`tools/triage_notification.py`）ほか、`tools/jev_client.py` 経由の意味判断に使う。**未設定・不通なら全処理が Jev なしで従来どおり動く**（opt-in・fail-soft）。公式 SDK 互換の `TYPESAFE_API_KEY` でも可。活用ガイドは `docs/jev-integration.md` | 任意 | `apik_...` |
 
-本ベースが標準で使うのは上記の `SLACK_*` だけ。**外部 API のトークン等、プロジェクト固有の変数は
+本ベースが標準で使うのは上記の `SLACK_*`（必須）と `JEV_KEY`（任意・opt-in）だけ。**外部 API のトークン等、プロジェクト固有の変数は
 各プロジェクトが本表に追記する**（ベース側には一切ハードコードしない）。`setup_github_variables.py` も
 プロジェクト固有変数を持たず、`MANAGED_GITHUB_VARS` 環境変数（カンマ区切り）で管理対象を注入する。
 

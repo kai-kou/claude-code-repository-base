@@ -17,6 +17,15 @@ Third-party components
     no modifications to it. If files here are modified in the future, note the
     change inline in the affected files (Apache-2.0 section 4(b)).
 
+.claude/skills/typesafe-ai/
+    Vendored from TypeSafe AI's agent skill repository
+    (https://github.com/typesafe-ai/skills, skills/typesafe-ai/SKILL.md).
+    Licensed under the MIT License (Copyright (c) 2026 TypeSafe AI).
+    The full license text is included at .claude/skills/typesafe-ai/LICENSE.txt
+
+    As of 2026-09-17 this directory is vendored as-is, with only a provenance
+    comment added after the frontmatter. Refresh from upstream when updating.
+
 --------------------------------------------------------------------------------
 
 When redistributing this repository (including via scripts/apply-to-repo.sh,

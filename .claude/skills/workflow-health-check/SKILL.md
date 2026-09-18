@@ -2,7 +2,7 @@
 name: workflow-health-check
 description: 開発・運用ワークフローの健全性（PR 健全性・Issue 状態・パイプライン整合性・retro-try フィードバックループ・CLAUDE.md/常駐ルール肥大化）を自動監査し、問題を検出したら根本原因を特定して自動修正するスキル。「ワークフロー監査して」「ヘルスチェックして」「/workflow-health-check」と依頼された時に使用する。完全版は手動起動またはプロジェクトの定期ルーティンに組み込んだ週次ゲートから、軽量版（PR 健全性 + Issue 状態のみ）は日次の衛生スロット（project-sync 開始時）から実行される。監査ロジックの主体は本スキルで、project-sync は本スキルの軽量版を呼び出す側（主従関係）。
 effort: low
-allowed-tools: Bash, Read, mcp__github__list_issues, mcp__github__issue_read, mcp__github__issue_write, mcp__github__add_issue_comment, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__actions_list, mcp__github__create_pull_request, mcp__github__merge_pull_request, mcp__Claude_Code_Remote__list_triggers
+allowed-tools: Bash, Read, mcp__github__list_issues, mcp__github__issue_read, mcp__github__issue_write, mcp__github__add_issue_comment, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__actions_list, mcp__github__create_pull_request, mcp__github__merge_pull_request, mcp__Claude_Code_Remote__list_triggers, mcp__Claude_Code_Remote__get_session
 ---
 
 # workflow-health-check スキル
@@ -160,6 +160,7 @@ Step 3 以降を実行する。週次レポートフォーマット・実行コ�
 | Slack 通知送信 | ✅ | 情報提供のみ |
 | Phase 移行 Issue 作成 | ✅ | 漏れ補完 |
 | retro-try Issue 作成 | ✅ | 記録のみ |
+| `[routine-stall]` Issue 作成 | ✅ | 記録のみ。同一ルーティンへの重複起票はしない（Step 5-f2・`reference.md`） |
 | 重複 retro-try Issue の duplicate クローズ | ✅ | メイン Issue にコメント追記後にクローズ（Step 5-b・`reference.md`） |
 | 候補台帳 Issue（`[Retro][ledger]`）のクローズ・統合 | ❌ | `retrospective` が管理（health-check は Step 5-e で存在・重複を報告するのみ） |
 | PR クローズ | ⚠️ 条件付き | 重複 PR かつ古い方のみ。コメント投稿後 24h 経過が条件 |

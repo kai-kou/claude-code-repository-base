@@ -115,6 +115,7 @@ A-1 以外は運用ルールとして定義されたもので、フックが物�
 | **PR を見届ける** | `pr-review-watcher` / `code-review` / `self-reviewer` / `discussion-review`（議論型レビュー）スキル + `pre-git-push-check` / `pre-pr-create-check` / `stop-router`（未コミット・未 PR 検知）フック |
 | **リポジトリの衛生を保つ** | `project-manager` / `project-sync` / `workflow-health-check` / `waiting-user-handler` / `checkpoint` スキル + `retrospective` / `retro-try-handler` / `self-improvement-loop` / `skill-audit` の改善ループ + `check_pending_pr_reviews.py` ほかの `tools/` |
 | **別のリポジトリへ配る** | `apply-base` / `claude-code-spec-sync` スキル + `scripts/bootstrap.sh` / `scripts/apply-to-repo.sh` / `modules.yaml` |
+| **小さな意味判断を機械化する（任意）** | TypeSafe Jev（System One モデル）の共通クライアント `tools/jev_client.py` + 通知トリアージの言い換え補完 + 同梱の `typesafe-ai` スキル。`JEV_KEY` を設定したときだけ有効になり、未設定・不通なら従来どおり動く。活用ガイドは [`docs/jev-integration.md`](docs/jev-integration.md) |
 
 そのほか、サブエージェント定義（`.claude/agents/owner.md` = プロダクトオーナーロール）、
 スラッシュコマンド（`/next` 次のタスク自律判定・`/status` 現状把握）、
