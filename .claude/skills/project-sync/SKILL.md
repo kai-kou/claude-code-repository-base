@@ -6,10 +6,9 @@ model: haiku
 allowed-tools: Bash, Read, Skill, mcp__github__list_issues, mcp__github__issue_read, mcp__github__issue_write, mcp__github__list_issue_fields, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__merge_pull_request, mcp__github__add_issue_comment, mcp__github__search_issues
 ---
 
-> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
-> 導入しても repo スコープ REST が 403 になる。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
-> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2。
-> ラベル一覧/作成・マイルストーン・release 作成・variables は MCP に等価が無く **クラウドでは実行不可**・同 §2.5）。
+> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウドでは実 gh が無く PATH 上はシムだけ。**本ファイル内の `gh ...` はローカル実行専用** で、
+> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2）。PR の Resolve /
+> auto-merge / draft 化も **MCP にツールがある**。ラベル作成等は MCP に無いが repo REST 直叩きで到達しうる（可否は変動・同 §1）。
 
 
 # project-sync スキル

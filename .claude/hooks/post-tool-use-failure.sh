@@ -28,17 +28,18 @@ error_output=$(echo "$input" | jq -r '.tool_response // ""')
 # gh コマンドでなければスキップ
 if ! echo "$command" | grep -qE '^\s*gh '; then exit 0; fi
 
-# --- egress プロキシの 403 ブロック検出（L-114・2026-07-26 実測: repo REST も 403 へ回帰） ---
-# クラウドでは GraphQL・search・非 repo REST・Actions variables/secrets に加え、
-# repo スコープ REST（gh api repos/{o}/{r}/...）も 403 になる（原因はリポジトリの API attach 不足で、
-# gh の再実行・導入・トークン差し替え・urllib 直叩きのいずれでも解決しない・Issue #338 / #342）。
+# --- egress プロキシの 403 ブロック検出（L-114・2026-09-18 実測・#692） ---
+# クラウドで一貫して 403 なのは GraphQL・search・非 repo REST・Actions variables/secrets・ref 削除。
+# repo スコープ REST は可否が変動する（07-14 許可 → 07-26 403 → 09-18 再び 200・#338 / #692）ため、
+# 403 を観測したときだけ MCP へ寄せる（原因はリポジトリの API attach 不足で、gh の再実行・導入・
+# トークン差し替えのいずれでも解決しない）。
 # シグネチャの SSOT は tools/gh_shim.py の ERROR_GUIDANCE（drift 注意）。ここでは既知文言
 # + 汎用 HTTP 403 を検出する（プロキシ文言は変動するため exact-match のみに依存しない）
-if echo "$error_output" | grep -qE 'GraphQL proxying is not enabled|GraphQL query is not enabled|connect the Claude GitHub App|GitHub access is not enabled for this session|sessions are bound to their configured repositories|Access to this GitHub Actions path is not permitted|Resource not accessible by integration|HTTP 403'; then
+if echo "$error_output" | grep -qE 'GraphQL proxying is not enabled|GraphQL query is not enabled|GitHub GraphQL is not available|connect the Claude GitHub App|GitHub access is not enabled for this session|sessions are bound to their configured repositories|Access to this GitHub Actions path is not permitted|Write access to this GitHub API path is not permitted|Resource not accessible by integration|HTTP 403'; then
   jq -n --arg cmd "$command" '{
     "hookSpecificOutput": {
       "hookEventName": "PostToolUseFailure",
-      "additionalContext": ("[proxy-error-detector] クラウドで gh が 403 になりました（L-114）。gh のリトライ・導入・GH_TOKEN 差し替え・urllib/curl 直叩きのいずれでも解決しません（原因はリポジトリの API attach 不足）。\nコマンド: " + $cmd + "\n\n→ mcp__github__* へ切り替えてください（代替表 SSOT: docs/rules/github-mcp-fallback-patterns.md §2）:\n  - Issue/PR: list_issues / issue_read / issue_write / add_issue_comment / list_pull_requests / pull_request_read / create_pull_request / merge_pull_request\n  - ファイル: get_file_contents / create_or_update_file / push_files\n  - 検索・CI: search_issues / search_code / actions_list / get_job_logs\n  - git 操作（clone/fetch/push）は別プロキシで生存しているのでそのまま使える\n  - gh variable/secret はクラウド代替なし（env は Claude.ai 環境設定 / secrets-broker・同 §2.4）")
+      "additionalContext": ("[proxy-error-detector] クラウドで GitHub API が 403 になりました（L-114）。gh のリトライ・導入・GH_TOKEN 差し替えのいずれでも解決しません（原因はリポジトリの API attach 不足）。\nコマンド: " + $cmd + "\n\n→ mcp__github__* へ切り替えてください（代替表 SSOT: docs/rules/github-mcp-fallback-patterns.md §2）:\n  - Issue/PR: list_issues / issue_read / issue_write / add_issue_comment / list_pull_requests / pull_request_read / create_pull_request / merge_pull_request\n  - ファイル: get_file_contents / create_or_update_file / push_files\n  - 検索・CI: search_issues / search_code / actions_list / get_job_logs\n  - PR の review thread Resolve / auto-merge / draft 化は MCP にツールがある: resolve_review_thread / unresolve_review_thread / enable_pr_auto_merge / disable_pr_auto_merge / update_pull_request(draft=)\n  - MCP を呼べないフック・tools/*.py からだけ CCR routes（.../pulls/{n}/ccr/...・同 §2.6）を使う。auto-merge の有効化はスクリプト層から行わない（不可逆操作を確認境界の外に出さない）\n  - git 操作（clone/fetch/push）は別プロキシで生存しているのでそのまま使える\n  - ref 削除（ブランチ削除）と gh variable/secret はクラウド代替なし（同 §1 / §2.4）")
     }
   }'
   exit 0

@@ -4,10 +4,9 @@ description: kai-kou/claude-code-repository-base（公開ベース）の汎用�
 effort: medium
 ---
 
-> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
-> 導入しても repo スコープ REST が 403 になる。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
-> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2。
-> ラベル一覧/作成・マイルストーン・release 作成・variables は MCP に等価が無く **クラウドでは実行不可**・同 §2.5）。
+> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウドでは実 gh が無く PATH 上はシムだけ。**本ファイル内の `gh ...` はローカル実行専用** で、
+> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2）。PR の Resolve /
+> auto-merge / draft 化も **MCP にツールがある**。ラベル作成等は MCP に無いが repo REST 直叩きで到達しうる（可否は変動・同 §1）。
 
 
 # claude-code-base 適用スキル（apply-base）
@@ -21,7 +20,7 @@ effort: medium
 
 > 🔶 **取得元**: `apply-base` の取得元は **公開リポジトリ `kai-kou/claude-code-repository-base` を正とする**（§1・§2 参照）。公開リポジトリからの取得になるため、アクセス権を持たない第三者も本スキルをそのまま使える。
 - ベースは **public**（`kai-kou/claude-code-repository-base`）の想定。取得は **git clone（`https://github.com/...`）を一次経路** にする（public のため認証不要。プロキシ/トークンが付与されていても支障はない）。
-- 🔴 **クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）では `gh api repos/.../contents`・`gh repo clone` が egress プロキシに 403 でブロックされる**（L-114・`github-mcp-fallback-patterns.md`）。よってベース取得に `gh api contents` を使わない。クラウドで生存するのは `git clone https://...` と公式 MCP（`mcp__github__get_file_contents`）のみ。
+- 🔴 **クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）ではベース取得に `gh api contents` を使わない**（L-114・`github-mcp-fallback-patterns.md`）。実 gh がプリインストールされておらず、`gh repo clone` は内部で API 解決を伴うため失敗する。repo スコープ REST 自体の可否は変動するので当てにしない（同 §1）。**可否変動と無関係に生存するのは `git clone https://...`（git プロキシ）と公式 MCP（`mcp__github__get_file_contents`）** なので、この 2 つだけを使う。
 - 適用は **冪等**。初回適用にも、ベース更新後の再同期にも同じ手順を使う。
 - 既存の `CLAUDE.md` / `docs/project-mission.md` は **既定で保護**（上書きしない）。
 - 🔴 **SYNC_PATHS 配下（`docs/rules` / `.claude/*` / `tools` / `scripts` / `.mcp.json` / `.claude/settings.json` 等）も無条件上書きしない**。

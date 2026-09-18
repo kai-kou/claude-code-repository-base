@@ -99,20 +99,39 @@ def _repo_slug_from_env() -> str | None:
 # 403 エラーカテゴリ → MCP 代替ガイダンス（文言はプロキシの実メッセージに合わせる・2026-07-14 実測）
 ERROR_GUIDANCE: list[tuple[str, str]] = [
     (
+        # 2026-09-18 にプロキシが返し始めた新文言（#692）。旧シグネチャとは語が重ならないため
+        # 独立エントリが要る（"GraphQL query is not enabled" では一致しない・実測）
+        "GitHub GraphQL is not available",
+        "GraphQL はプロキシで遮断（2026-09-18 文言）。同じコマンドの再実行では解決しない。"
+        "→ repo スコープ REST（gh api repos/{o}/{r}/...）か MCP（mcp__github__*）を使う。"
+        "review thread の一覧/解決は **CCR routes**（gh api repos/{o}/{r}/pulls/{n}/ccr/review_threads 等）"
+        "が代替になる。auto-merge / draft 化は MCP（enable_pr_auto_merge / update_pull_request）を使う"
+        "（SSOT: docs/rules/github-mcp-fallback-patterns.md §2.6）",
+    ),
+    (
         "GraphQL query is not enabled",
         "GraphQL はプロキシで遮断。このエラーが出た時点でシムの変換対象外（または PATH に .claude/bin が"
         "未注入・`gh --shim-doctor` で確認）。同じコマンドの再実行では解決しない → repo スコープ REST"
-        "（gh api repos/{o}/{r}/...）か MCP（mcp__github__*）を使う"
-        "（SSOT: docs/rules/github-mcp-fallback-patterns.md §2）",
+        "（gh api repos/{o}/{r}/...）か MCP（mcp__github__*）を使う。review thread の一覧/解決・"
+        "auto-merge・ready-for-review・draft 化は CCR routes "
+        "（gh api repos/{o}/{r}/pulls/{n}/ccr/review_threads 等）が GraphQL の代替になる"
+        "（SSOT: docs/rules/github-mcp-fallback-patterns.md §2 / §2.6）",
     ),
     (
         "GraphQL proxying is not enabled",
-        "GraphQL はプロキシで遮断。→ MCP（mcp__github__*）または repo スコープ REST（gh api repos/{o}/{r}/...）を使う",
+        "GraphQL はプロキシで遮断。→ MCP（mcp__github__*）または repo スコープ REST（gh api repos/{o}/{r}/...）を使う。"
+        "PR review thread の Resolve は CCR routes（.../pulls/{n}/ccr/...・§2.6）、"
+        "auto-merge / draft 化は MCP（enable_pr_auto_merge / update_pull_request）で行う",
     ),
     (
         "sessions are bound to their configured repositories",
         "非 repo REST / search はプロキシで遮断。→ mcp__github__search_issues / search_code / "
         "search_pull_requests / search_users（repo: 修飾でスコープ内に限定）を使う",
+    ),
+    (
+        "Write access to this GitHub API path is not permitted",
+        "この REST パスへの write はプロキシで遮断（ref 削除等）。→ 代替経路なし。"
+        "リモートブランチ削除はオーナーが GitHub UI かローカル git で行う（#399）",
     ),
     (
         "GitHub Actions path is not permitted",
@@ -126,7 +145,8 @@ ERROR_GUIDANCE: list[tuple[str, str]] = [
     ),
     (
         "GitHub access is not enabled for this session",
-        "repo スコープ REST がプロキシで遮断（許可範囲が再変更された可能性）。→ MCP（mcp__github__*）へ切替。"
+        "repo スコープ REST がプロキシで遮断（許可範囲が再変更された可能性。2026-09-18 時点では 200 だった）。"
+        "→ MCP（mcp__github__*）へ切替。"
         "docs/rules/github-mcp-fallback-patterns.md の検証マトリクス更新も検討",
     ),
     (
@@ -174,7 +194,15 @@ def annotate_and_exit(stdout: bytes, stderr: bytes, code: int) -> None:
         else:
             # 既知シグネチャに一致しない 403（プロキシ文言は変動する・07-13 実例）にも
             # 汎用ガイダンスを出す（「403 = トークン権限不足」の誤診断・リトライ浪費を防ぐ）
-            if "HTTP 403" in combined or '"status": "403"' in combined:
+            # プロキシの JSON エラーには "HTTP 403" が含まれないことがある（#692 実測）。
+            # gh が付ける表現ゆれ（HTTP 403 / status: 403）と、プロキシ固有の語を両方見る。
+            if (
+                "HTTP 403" in combined
+                or '"status": "403"' in combined
+                or "not permitted through this proxy" in combined
+                or "is not available from Claude Code sessions" in combined
+                or "This GitHub API path is not available" in combined
+            ):
                 sys.stderr.write(
                     "\n[gh-shim] 未知の 403（プロキシ文言が変化した可能性）。リトライでは解決しない。"
                     "`gh --shim-doctor` で現在の許可範囲を確認し、MCP（mcp__github__*）へ切替する"
@@ -842,9 +870,34 @@ def self_test() -> None:
         check(f"translator:{key}", key in TRANSLATORS)
 
     # 403 ガイダンスのシグネチャ
-    for sig in ["GraphQL query is not enabled", "sessions are bound",
-                "GitHub Actions path is not permitted", "Resource not accessible by integration"]:
+    for sig in ["GraphQL query is not enabled", "GitHub GraphQL is not available", "sessions are bound",
+                "GitHub Actions path is not permitted", "Write access to this GitHub API path is not permitted",
+                "Resource not accessible by integration"]:
         check(f"guidance:{sig[:20]}", any(sig in s for s, _ in ERROR_GUIDANCE))
+
+    # 実プロキシ文言でのマッチ検証（シグネチャの存在だけでなく実際に当たるかを見る・#692）。
+    # ここを外すと「SSOT に新文言を書いたのにシムは旧シグネチャのまま」という drift を検出できない
+    real_messages = {
+        "graphql-2026-09": (
+            "GitHub GraphQL is not available from Claude Code sessions; use the REST API "
+            "(gh api repos/{owner}/{repo}/...). For review threads, auto-merge, and "
+            "draft/ready-for-review use the CCR routes on api.github.com: "
+            "GET /repos/{owner}/{repo}/pulls/{n}/ccr/review_threads"
+        ),
+        "graphql-2026-07": (
+            "This GraphQL query is not enabled for this session — only the pinned set of "
+            "PR-review operations is served."
+        ),
+        "ref-delete": "Write access to this GitHub API path is not permitted through this proxy.",
+        "search": (
+            "This GitHub API path is not available: sessions are bound to their configured "
+            "repositories."
+        ),
+        "actions-vars": "Access to this GitHub Actions path is not permitted through this proxy.",
+        "repo-attach": "GitHub access is not enabled for this session.",
+    }
+    for label, msg in real_messages.items():
+        check(f"guidance-match:{label}", any(sig in msg for sig, _ in ERROR_GUIDANCE))
 
     if failures:
         print("SELF-TEST FAILED:\n  " + "\n  ".join(failures))
@@ -866,14 +919,22 @@ def main() -> None:
         msg = "[gh-shim] 実 gh が見つかりません（PATH に gh 本体が必要）\n"
         if is_cloud():
             # 実 gh 本体が無いと本シムは repo スコープ REST 変換すら実行できない
-            # （subprocess.run([real_gh, ...]) の対象が無い）。GH_TOKEN 等を使った
-            # urllib/curl 直叩きも「GitHub access is not enabled for this session」で
-            # 同じくプロキシに 403 で拒否される（実測・#313）ため、代替は MCP のみ。
+            # （subprocess.run([real_gh, ...]) の対象が無い）。
+            # 直叩きの可否は「プロキシの許可範囲が今どうなっているか」次第で変動する（#692）:
+            #   - 2026-07-26 実測: repo スコープ REST も 403（"GitHub access is not enabled..."）
+            #   - 2026-09-18 実測: repo スコープ REST は 200 に回帰（read / write とも到達）
+            # したがって「直叩きは必ず 403」と断定しない。呼び出し元が自分で 1 回叩いて
+            # 現在の可否を確かめられるよう、判定コマンドを添えて案内する。
             msg += (
                 "[gh-shim] このクラウド実行環境には gh 本体が無いため repo スコープ REST 変換も "
-                "実行できません。GH_TOKEN を使った urllib/curl 直叩きもプロキシに 403 で拒否されます"
-                "（\"GitHub access is not enabled for this session\"）。"
-                "mcp__github__* ツールを使ってください"
+                "実行できません。代替は次の 2 つ:\n"
+                "[gh-shim]   1) mcp__github__* ツール（一次経路・プロキシ可否の変動に影響されない）\n"
+                "[gh-shim]   2) curl/urllib で repo スコープ REST を直叩き（可否は変動する。"
+                "curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/{owner}/{repo} "
+                "が 200 なら使える / 403 なら MCP へ）\n"
+                "[gh-shim] GraphQL は一貫して 403。review thread の resolve は CCR routes "
+                "（/repos/{owner}/{repo}/pulls/{n}/ccr/...）、auto-merge / draft 化は "
+                "MCP（enable_pr_auto_merge / update_pull_request）で代替する。"
                 "（SSOT: docs/rules/github-mcp-fallback-patterns.md）\n"
             )
         sys.stderr.write(msg)

@@ -4,10 +4,9 @@ description: GitHub プロジェクト（Milestones・Projects V2・Issues・Lab
 effort: medium
 ---
 
-> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
-> 導入しても repo スコープ REST が 403 になる。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
-> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2。
-> ラベル一覧/作成・マイルストーン・release 作成・variables は MCP に等価が無く **クラウドでは実行不可**・同 §2.5）。
+> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウドでは実 gh が無く PATH 上はシムだけ。**本ファイル内の `gh ...` はローカル実行専用** で、
+> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2）。PR の Resolve /
+> auto-merge / draft 化も **MCP にツールがある**。ラベル作成等は MCP に無いが repo REST 直叩きで到達しうる（可否は変動・同 §1）。
 
 
 # GitHub プロジェクト管理スキル
@@ -159,9 +158,9 @@ PR マージ時: Issue を close（PR 本文に "Closes #N"）→ Projects V2 �
 
 ### Projects V2 のステータス更新（使う場合・**ローカル実行のみ**）
 
-> ⚠️ クラウドでは実行不可（MCP に等価ツールなし・§2.5）。`gh project`（Projects V2 GraphQL）はクラウドで 403 のため、
-> ローカル実行または代替手段が必要。クラウドセッションではこのステップをスキップし、`status:*` Issue ラベルで代替する
-> （built-in automation の close → Done は維持される）。
+> ⚠️ クラウドでは実行不可（MCP に等価ツールなし・§2.5）。`gh project` は **Projects V2 GraphQL** に依存し、
+> GraphQL はクラウドで一貫して 403（CCR routes にも Projects 系は無い）。クラウドセッションではこのステップを
+> スキップし、`status:*` Issue ラベルで代替する（built-in automation の close → Done は維持される）。
 
 ```bash
 # 1. フィールドID・オプションID を取得
@@ -225,8 +224,8 @@ gh project item-list PROJECT_NUMBER --owner __OWNER__ --format json
 ## 4. マイルストーン完了判定
 
 マイルストーン内の全 Issue が close されたら、完了基準を確認してマイルストーンを close する
-（⚠️ クラウドでは実行不可（MCP に等価ツールなし・§2.5）: milestones REST はクラウドで 403 のため、
-ローカル実行または代替手段が必要。クラウドではスキップし、束ねた epic Issue のクローズで代替する）:
+（MCP に等価ツールは無いが、**milestones は repo スコープ REST なのでクラウドから直叩きできる**
+（2026-09-18 実測で一覧 200・§1）。403 が返った場合だけスキップし、束ねた epic Issue のクローズで代替する）:
 
 ```bash
 gh api repos/__OWNER__/__REPO__/milestones --jq '.[] | "\(.number): \(.title)"'

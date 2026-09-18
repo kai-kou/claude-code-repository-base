@@ -1,9 +1,14 @@
 # pr-review-watcher 詳細リファレンス
 
 > 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
-> 導入しても repo スコープ REST が 403 になる。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
-> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2。
-> ラベル一覧/作成・マイルストーン・release 作成・variables は MCP に等価が無く **クラウドでは実行不可**・同 §2.5）。
+> PATH 上にあるのはシムだけ。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
+> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2）。
+> 本ファイルの GraphQL 版（review thread の thread_id 取得・`resolveReviewThread`）は、
+> クラウドでは **MCP**（`mcp__github__resolve_review_thread` / `unresolve_review_thread`・
+> auto-merge は `enable_pr_auto_merge`・draft 化は `update_pull_request(draft=)`）で代替する。
+> **MCP を呼べないフック・`tools/*.py` からだけ** CCR routes
+> （`GET/POST .../pulls/{n}/ccr/review_threads` `.../ccr/comments/{id}/resolve`）を使う（同 §2.6）。
+> スクリプト層から auto-merge を有効化しない（不可逆操作を確認境界の外に出さない・同 §2.6）。
 
 
 > `pr-review-watcher` スキルの **詳細手順**（Step 1-7・GraphQL コマンド・トラブルシューティング・

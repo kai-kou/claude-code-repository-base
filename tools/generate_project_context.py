@@ -49,7 +49,7 @@ WAITING_LIMIT = int(os.environ.get("PROJECT_CONTEXT_WAITING_LIMIT", "15"))
 def rest_json(path_qs: str):
     """repo スコープ REST（gh api）で JSON を取得。失敗は None（0 件と区別）。
 
-    ローカル実行の一次経路。**クラウドでは gh が未導入で repo スコープ REST も 403 になるため
+    ローカル実行の一次経路。**クラウドでは実 gh が未導入のため
     通常は必ず失敗する**（2026-07-26 実測・Issue #338/#342）。その場合は render_remote() の
     縮退スナップショット（MCP での確認を促すポインタ）へ落ちる。失敗を空リストに縮退させると
     スナップショットが「（なし）」と誤表示され現状把握を静かに壊すため、None をセンチネルとして返す。
@@ -140,7 +140,7 @@ def fmt(items, empty="（なし）"):
 def render_remote(now: str) -> str:
     """縮退スナップショット（REST で Issue/PR が取れない場合のフォールバック）。
 
-    **クラウドでは gh 未導入・repo スコープ REST 403 のため、これが通常経路になる**
+    **クラウドでは実 gh が未導入のため、これが通常経路になる**（repo スコープ REST の可否は変動する別軸・#692）
     （2026-07-26 実測・Issue #338/#342）。4 ブロックの無情報警告を注入する代わりに、
     MCP 経由確認を促す 1 行ポインタ + git 由来の直近コミットだけを注入する（Issue #249）。
     プロキシが repo REST を再び許可した場合は完全スナップショット側が使われる。
@@ -150,7 +150,7 @@ def render_remote(now: str) -> str:
         f"# プロジェクト状態スナップショット（{now} 更新）\n",
         "> SessionStart フックが自動注入。最新化は `python3 tools/generate_project_context.py`。\n",
         "\n## Issue / PR\n",
-        "クラウドでは gh が 403 のため未取得。`mcp__github__list_issues` / "
+        "クラウドでは実 gh が未導入のため未取得。`mcp__github__list_issues` / "
         "`mcp__github__list_pull_requests` で直接確認する（status:in-progress / "
         "status:waiting-claude / status:waiting-user / open PR・L-114）。\n",
         "\n## 直近のコミット\n",

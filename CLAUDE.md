@@ -134,12 +134,14 @@
 
 ### gh CLI / GitHub 操作（クラウドは MCP 一次経路・gh は当てにしない）
 
-> 🔴 **クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）では `mcp__github__*` が一次経路**（L-114）。GitHub API プロキシの許可範囲は変動する（07-14 に許可された repo スコープ REST が 07-26 に 403 へ回帰・#338）ため、可否を暗記せず **MCP → git → （あれば）gh** の順で使う。可否マトリクス・代替表の SSOT は `docs/rules/github-mcp-fallback-patterns.md`。
+> 🔴 **クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）では `mcp__github__*` が一次経路**（L-114）。GitHub API プロキシの許可範囲は変動する（repo スコープ REST は 07-14 許可 → 07-26 403 → **09-18 再び 200**・#338 / #692）ため、可否を暗記せず **MCP → git → （あれば）gh** の順で使う。可否マトリクス・代替表の SSOT は `docs/rules/github-mcp-fallback-patterns.md`。
 
 - **`gh` はクラウドにプリインストールされていない**（公式仕様）。PATH 上にあるのはシム（`.claude/bin/gh` → `tools/gh_shim.py`）だけで、実 gh 不在時は `[gh-shim] 実 gh が見つかりません` と MCP 代替を案内する → **素直に `mcp__github__*` を使う**（`apt install gh` を解決策として試さない・#318 / #338）
-- **403 の切り分け**: `gh api user` が 200 なら認証は正常で、403 の原因は **リポジトリが API アクセス付きでセッションに attach されていないこと**。`GH_TOKEN` を触っても `curl`/`urllib` で直叩きしても同じ 403 になる（フォールバックにならない）
+- **403 の切り分け**: `gh api user` が 200 なら認証は正常で、403 の原因は **リポジトリが API アクセス付きでセッションに attach されていないこと**。`GH_TOKEN` を触っても解決しない（トークンの問題ではない）
+- **repo スコープ REST の直叩きは可否が変動する**（09-18 実測は 200）。**MCP を呼べない層**（フック・`tools/*.py`）だけが使ってよい経路で、使う直前に `curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/{o}/{r}` で確認し、403 ならリトライせず失敗シグナルを出す（同 §4）
+- **PR の Resolve / auto-merge / draft 化は MCP にツールがある**（`resolve_review_thread` / `enable_pr_auto_merge` / `update_pull_request(draft=)`）。メインセッションは常に MCP を使う。**CCR routes**（`/repos/{o}/{r}/pulls/{n}/ccr/...`）は同じ操作を REST で代替する Anthropic 提供ルートだが **MCP を呼べない層（フック・`tools/*.py`）専用** で、auto-merge の有効化はスクリプト層から行わない（同 §2.6）
 - **git 操作は別プロキシで常時生存**: `git clone/fetch/pull/push`・`git ls-remote` は API の 403 と無関係に動く
-- MCP が唯一経路になるもの: `gh api graphql` / `gh search` 系 / 非 repo REST / Actions（`mcp__github__actions_list`・`get_job_logs`）
+- MCP が唯一経路になるもの: `gh search` 系 / 非 repo REST（いずれも 403 のまま）。GraphQL は MCP か CCR routes（§2.6）で代替する
 - ローカル実行では gh がフル機能で動く（シムは即 exec でパススルー・repo 指定は `-R {{REPO_SLUG}}`）
 
 ### ブランチ / コミットメッセージ

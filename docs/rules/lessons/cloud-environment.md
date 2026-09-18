@@ -80,16 +80,23 @@ bash 停止中も MCP（GitHub 操作）・Write/Edit・コミットは `mcp__gi
 
 **症状**: クラウド実行環境（`CLAUDE_CODE_REMOTE=true`）で GitHub API 経路が 403 になる。
 **可否は変動する**（06-30 #121 → 07-02 拡大 #133 → 07-13 文言変化 #227 → 07-14 repo REST が許可に転換 #254
-→ **07-26 repo REST が再び 403 へ回帰 #338**）。2026-07-26 実測:
+→ 07-26 repo REST が再び 403 へ回帰 #338 → **09-18 repo REST が再び 200・CCR routes 出現 #692**）。
 
-- ❌ **`gh` はそもそもプリインストールされていない**（公式仕様）。`apt install -y gh` で導入は可能だが、
-  **導入しても repo スコープ REST が 403 なら何も解決しない**（＝ gh の導入を解決策として試さない）
+**2026-09-18 実測**:
+
+- ❌ **`gh` はそもそもプリインストールされていない**（公式仕様。PATH 上はシムだけ）
 - ✅ `gh api user`・`gh api rate_limit` は **200**（プロキシの認証注入は効いている）
-- ❌ `gh api repos/{o}/{r}/...` は **403**「GitHub access is not enabled for this session.
-  An org admin must connect the Claude GitHub App for this organization.」
-- ❌ GraphQL は 403「only the pinned set of PR-review operations is served」
-- ❌ `curl`/`urllib` 直叩きは `Authorization` 有無・`Bearer proxy-injected`・実 `GH_TOKEN` とも同一 403
-- ✅ **MCP（`mcp__github__*`）と git 操作は生存**（どちらも API プロキシを通らない別系統）
+- ✅ **`repos/{o}/{r}/...` の REST は read も write も到達**（`pulls` / `issues` / `labels` /
+  `milestones` / `actions/runs` が 200、存在しないリソースへの POST は 404）
+- ❌ GraphQL は 403。ただし文言が変わり **CCR routes**（`/repos/{o}/{r}/pulls/{n}/ccr/...`）を案内する
+  → review thread の一覧・Resolve、auto-merge、ready-for-review、draft 化はこの REST で代替できる
+- ❌ search 系・非 repo REST（`users/{u}` `user/repos` `notifications`）・Actions variables/secrets は **403 のまま**
+- ❌ **ref 削除だけは名指しで拒否**「Write access to this GitHub API path is not permitted through this proxy」
+- ✅ **MCP（`mcp__github__*`）と git 操作は生存**（どちらも API プロキシを通らない別系統＝可否変動に強い）
+
+> 🔴 **行動規範は不変**: 可否が 3 か月で 5 回変わっているため、**メインセッションは MCP 一次経路を維持する**。
+> repo REST 直叩きに依存してよいのは MCP を呼べない層（フック・`tools/*.py`）だけで、使う直前に
+> `curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/{o}/{r}` で確認する。
 
 **根本原因**: プロキシは GitHub API リクエストを **セッションに attach されたリポジトリに限定** する
 （環境のネットワークアクセスレベルとは独立）。`access:"read"` の attach は git clone/fetch のみで

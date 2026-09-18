@@ -6,8 +6,9 @@ effort: high
 disallowed-tools: AskUserQuestion
 ---
 
-> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず
-> repo スコープ REST が 403 になる。本スキルの GitHub 操作は **`mcp__github__*` が一次経路**。
+> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
+> PATH 上にあるのはシムだけ（repo スコープ REST の可否は変動する・同 §1）。本スキルの GitHub 操作は
+> **`mcp__github__*` が一次経路**。
 > 以下に `gh` コマンドが出てくる箇所は、クラウドでは対応する MCP ツールへ読み替える
 > （可否マトリクスの SSOT: `docs/rules/github-mcp-fallback-patterns.md`）。
 

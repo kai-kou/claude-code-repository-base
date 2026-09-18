@@ -811,3 +811,32 @@
   ツール（承認 UI に「常に許可」が出ないもの）は allow に書いても毎回プロンプトになるため、無人ルーティンが
   呼ぶスキルの `allowed-tools` / コネクタから外すこと。参照されているが allow に無いツールは
   `python3 tools/check_mcp_allowlist.py` で洗い出せる（除外リストは `config/mcp_allowlist_check_ignore.txt`）。
+
+
+## 2026-09-18（Issue #692）GitHub API プロキシの可否マトリクスを実測へ同期し CCR routes を追加
+
+- **変更内容**: `docs/rules/github-mcp-fallback-patterns.md`（SSOT）の実機検証マトリクスを 2026-09-18 実測へ
+  全面更新した。**repo スコープ REST が 403 から 200 へ回帰**（read / write とも到達）、`actions/runs` も 200 へ。
+  GraphQL は依然 403 だが、エラー文言が **CCR routes**（`/repos/{o}/{r}/pulls/{n}/ccr/review_threads`・
+  `.../ccr/comments/{id}/resolve`・`.../ccr/auto_merge`・`.../ccr/ready_for_review`・`.../ccr/convert_to_draft`）
+  を案内するよう変化していたため、新節 §2.6 として記載した。ref 削除は
+  「Write access to this GitHub API path is not permitted」で名指しブロックへ変化（結論＝削除不能は不変）。
+  あわせて `tools/gh_shim.py` の「urllib/curl 直叩きも 403」という誤案内を可否判定コマンド付きへ差し替え、
+  `.claude/hooks/post-tool-use-failure.sh` の 403 検知シグネチャに新文言を追加し、
+  スキル冒頭バナー 14 ファイルから「導入しても 403 / ラベル・マイルストーンはクラウドで実行不可」の断定を外した。
+  あわせて **PR の Resolve / auto-merge / draft 化には MCP ツールが実在する** ことを明記した（`resolve_review_thread` / `unresolve_review_thread` / `enable_pr_auto_merge` / `disable_pr_auto_merge` /
+  `update_pull_request(draft=)`）。CCR routes は **MCP を呼べない層（フック・`tools/*.py`）専用の代替**
+  であって MCP の置き換えではなく、`PUT .../ccr/auto_merge` は main へのマージを発火させうるため
+  **スクリプト層から auto-merge を有効化しない** ことを SSOT §2.6 に明記した。
+- **下流で必要な手動手順**: ① `CLAUDE.md`「gh CLI / GitHub 操作」節を書き換えている（repo スコープ REST の
+  可否が変動すること・CCR routes の存在・MCP が唯一経路になる範囲の縮小）。**下流の `CLAUDE.md` は
+  プロジェクト固有ファイルとして保護されるため自動反映されない**。同節を自リポジトリの `CLAUDE.md` へ転記すること。
+  ② **CCR routes を MCP の代替として常用しない**。PR の Resolve / auto-merge / draft 化は MCP にツールがあるので
+  メインセッションは MCP を使い、CCR routes はフック・`tools/*.py` からの Resolve と review thread 取得に限る
+  （auto-merge の有効化はスクリプト層から行わない）。
+  ③ 「クラウドでは repo REST が 403 だから実行不可」を理由に **ユーザーへローカル実行を依頼していた分岐**
+  （ラベル作成・マイルストーン close 等）を下流が独自に持っている場合、`403 を実際に観測したときだけ` に
+  限定へ変更すること（CP-6。可否が変動する経路なので「必ず 403」と決め打たない）。
+  ④ 可否の再確認は `curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/{owner}/{repo}` の
+  HTTP コードを見る。**メインセッションの MCP 一次経路は変更していない**（プロキシを通らず可否変動に強いため）。
+  repo REST 直叩きに依存してよいのは MCP を呼べない層（フック・`tools/*.py`）だけ。

@@ -4,10 +4,9 @@ description: 各ワークフロー実行後に Agent Teams（3役割の並列サ
 effort: medium
 ---
 
-> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウド実行環境では `gh` がプリインストールされず、
-> 導入しても repo スコープ REST が 403 になる。**本ファイル内の `gh ...` コマンドはローカル実行専用** で、
-> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2。
-> ラベル一覧/作成・マイルストーン・release 作成・variables は MCP に等価が無く **クラウドでは実行不可**・同 §2.5）。
+> 🔴 **GitHub 操作の経路（必読・L-114）**: クラウドでは実 gh が無く PATH 上はシムだけ。**本ファイル内の `gh ...` はローカル実行専用** で、
+> クラウドでは `mcp__github__*` に読み替える（対応表: `docs/rules/github-mcp-fallback-patterns.md` §2）。PR の Resolve /
+> auto-merge / draft 化も **MCP にツールがある**。ラベル作成等は MCP に無いが repo REST 直叩きで到達しうる（可否は変動・同 §1）。
 
 
 # レトロスペクティブスキル
@@ -232,7 +231,7 @@ mcp__github__list_issues(owner, repo, state="OPEN", labels=["type:retro-try"])  
 | サブエージェント失敗（1役割） | 残り2役割の結果で続行。失敗した役割を完了報告に明記 |
 | サブエージェント全失敗 | STOP。ユーザーに手動レビューを依頼 |
 | Issue 作成失敗 | 失敗した Try のタイトルを完了報告に列挙し、手動作成を依頼 |
-| `type:retro-try` ラベル未存在 | ローカル: `gh label create "type:retro-try" --color "c5def5" -R __OWNER__/__REPO__` で作成してリトライ。クラウドは 403 かつ MCP にラベル作成の等価ツールがないため、ユーザーにローカル実行を案内する |
+| `type:retro-try` ラベル未存在 | ローカル: `gh label create "type:retro-try" --color "c5def5" -R __OWNER__/__REPO__`。クラウド: MCP にラベル作成の等価ツールは無いが、**repo スコープ REST の直叩きで作成できる**（`curl -X POST https://api.github.com/repos/__OWNER__/__REPO__/labels -d '{"name":"type:retro-try","color":"c5def5"}'`）。403 が返った場合に限りユーザーへローカル実行を案内する（可否は変動・`github-mcp-fallback-patterns.md` §1） |
 | 台帳本文の集約表が壊れている / 読めない | コメント（監査ログ）から再構築して続行する（`reference.md` K） |
 | 台帳が 2 件以上ある | 更新日の新しい方を使い、完了報告に重複を記録する（統合は `workflow-health-check` が報告） |
 | Slack 通知失敗 | 無音でスキップ（エラーにしない） |
