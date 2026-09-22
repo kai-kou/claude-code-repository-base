@@ -1,11 +1,13 @@
 # Claude Code 最新機能リファレンス & ワークフロー最適化
 
 > 最終更新: 2026-07-03
-> 対象: Claude Code v2.1.219+, Claude 4.6/4.7/4.8/**5** モデルファミリー
+> 対象: Claude Code v2.1.219+, Claude 4.6/4.7/4.8/**5**/**5.5** モデルファミリー
+
+> **2026-09-22 追記（Opus 5.5 リリース・#695）**: **Claude Opus 5.5（`claude-opus-5-5`）が現行 Opus** となった（$4 / $20・Opus 5 比 20% 値下げ・**デフォルト effort は `medium`**・thinking 無効化不可・forced tool use はエラー）。運用ファイルは `opus` エイリアス指定のため **無修正で追随** する（Claude Code v2.1.280 以上で `opus` が Opus 5.5 に解決）。総点検の結果、運用ファイルに `claude-opus-5` の固定指定は無し。更新したのは参照表（`agent-team.md`）と料金表（`tools/calc_daily_cost.py`）のみ。以下の Opus 5 記述は当時の記録として残す。
 
 > **2026-07-24 追記②（モデル指定のエイリアス化・#314）**: モデル世代交代のたびにリポジトリを書き換える運用をやめ、**運用ファイルのモデル指定は `opus` / `sonnet` / `haiku` / `fable` のエイリアス既定** に統一した（公式: 「Aliases point to the recommended version for your provider and update over time」・Anthropic API では `opus`→Opus 5 / `sonnet`→Sonnet 5・v2.1.219+）。エイリアスは `/model`・`claude --model`・`ANTHROPIC_MODEL`・`settings.json` の `model`・サブエージェント/スキル frontmatter の `model`・Agent ツールの `model` パラメータで使える（Agent ツールは **エイリアスのみ** 受理）。厳密 ID を書く例外は ① API 直叩き ② 料金表など ID をキーにする実装 ③ 再現性のためのピン留め の 3 つ。SSOT は `agent-team.md`「モデル指定の方針」。
 
-> **2026-07-24 追記（Opus 5 リリース）**: **Claude Opus 5（`claude-opus-5`）が現行 Opus** となり、本ファイル・`agent-team.md` の推奨モデルを Opus 4.8 → Opus 5 に更新した（Opus 4.8/4.7/4.6 は legacy 参考として残置）。Opus 4.8 と **同価格（$5 / $25）・1M コンテキスト・128K 出力のドロップイン更新**。差分は ① **thinking が既定 ON**（未指定でも adaptive。4.8/4.7 は未指定＝思考なし。`max_tokens` は thinking + 応答の合計上限のため余裕を持たせる） ② **thinking 無効化は effort `high` 以下限定**（`xhigh`/`max` と併用すると HTTP 400） ③ prompt cache 最小長 512 トークン（4.8 は 1024） ④ レート枠は Opus 4.x プールと別枠 ⑤ Fast mode（`/fast`）対象は Opus 5 / 4.8（4.7 は v2.1.219 で除外・#306）。デフォルト effort は `high` で 4.8 と同じ。**Opus 5 は `low`/`medium` でも高品質** なため、コスト削減はモデル変更より先に effort を下げて評価する。挙動の癖（出力が長い・自己検証が過剰になりやすい・スコープを広げがち・サブエージェント委譲に積極的）は `agent-team.md` のモデル一覧注記を参照。
+> **2026-07-24 追記（Opus 5 リリース）**: **Claude Opus 5（`claude-opus-5`）が現行 Opus**（2026-09-22 に Opus 5.5 へ交代）となり、本ファイル・`agent-team.md` の推奨モデルを Opus 4.8 → Opus 5 に更新した（Opus 4.8/4.7/4.6 は legacy 参考として残置）。Opus 4.8 と **同価格（$5 / $25）・1M コンテキスト・128K 出力のドロップイン更新**。差分は ① **thinking が既定 ON**（未指定でも adaptive。4.8/4.7 は未指定＝思考なし。`max_tokens` は thinking + 応答の合計上限のため余裕を持たせる） ② **thinking 無効化は effort `high` 以下限定**（`xhigh`/`max` と併用すると HTTP 400） ③ prompt cache 最小長 512 トークン（4.8 は 1024） ④ レート枠は Opus 4.x プールと別枠 ⑤ Fast mode（`/fast`）対象は Opus 5 / 4.8（4.7 は v2.1.219 で除外・#306）。デフォルト effort は `high` で 4.8 と同じ。**Opus 5 は `low`/`medium` でも高品質** なため、コスト削減はモデル変更より先に effort を下げて評価する。挙動の癖（出力が長い・自己検証が過剰になりやすい・スコープを広げがち・サブエージェント委譲に積極的）は `agent-team.md` のモデル一覧注記を参照。
 
 > **2026-07-03 追記（ユーザー指示による事実確認・`/deep-research` のネイティブ実行）**: `code.claude.com/docs/en/workflows`・`/en/commands` を Fetch して確認した結果、`/deep-research` は公式に **Workflow** 分類（Skill ではない）で、CLI・Desktop・IDE拡張・`claude -p`・Agent SDK のいずれでも同一に動作し、**クラウド実行環境のメインセッションから `claude -p` サブプロセスを介さず直接 invoke できる** ことが確定した。モデルは既定でセッションのモデルを使用（スクリプトが明示的に別モデルへ routing しない限り）— 本プロジェクトの `run_deep_research_workflow.py` が Opus を使うのは明示指定によるプロジェクトの選択であり、ネイティブ機能自体が Opus 固定という意味ではない。手書き `.js` ワークフロー（`Workflow` ツール）も本セッションで実際に呼び出し可能なことを確認（ユーザー明示オプトイン時のみ使用する制約あり）。詳細は `docs/rules/dynamic-workflows-rules.md` と `.claude/skills/research-runner/SKILL.md`（Step 3a/3b）を参照。
 
@@ -58,12 +60,12 @@ Claude Code セッション内で思考の深度を設定できる。API レベ�
 | `/effort low` | `"low"` | 最小・大幅なトークン節約 | 定型チェック・軽量調査・ルーティング判断 |
 | `/effort medium` | `"medium"` | バランス・適度なトークン節約 | 通常の実装・PR 対応（Sonnet 5 に特に推奨） |
 | `/effort high` | `"high"` | 複雑なタスクに対応 | 複雑な実装・設計判断・ファクトチェック |
-| `/effort xhigh` | `"xhigh"` | コーディング/エージェント向け最適 | **`opus` 推奨**・台本生成・複数ファイルリファクタリング・アーキテクチャ設計（現行 Opus / Sonnet は既定 `high` のため明示指定が必要） |
+| `/effort xhigh` | `"xhigh"` | コーディング/エージェント向け最適 | **`opus` 推奨**・台本生成・複数ファイルリファクタリング・アーキテクチャ設計（現行 Opus 5.5 は既定 `medium`・Sonnet 5 は既定 `high` のため明示指定が必要） |
 | `/effort max` | `"max"` | 絶対最大・トークン無制限 | 最深の推論が必要な設計・アーキテクチャ決定。実用上は xhigh で十分なことが多い |
 
-> **2026-07-24 更新（Opus 5）**: effort は 5 段階（`low` / `medium` / `high` / `xhigh` / `max`）。**現行 Opus のデフォルトは `high`**（旧 Opus 4.7 のみ `xhigh`）。公式推奨は「コーディング/エージェントは `xhigh`、それ以外の知能重視は `high` を基準に eval で per-route 調整」。現行 Opus では **`low`/`medium` でも品質が高い** ため、コスト削減はまず effort を下げて評価する。`max` は Opus 系と Sonnet・Fable で利用可。
-> **注意**: `/effort high` は現行 Opus のデフォルト。意識的にコストを下げたい場合は `medium` または `low` を指定する。
-> **Opus 推奨**: 台本生成品質の観点から **`/model opus` + `/effort xhigh` を明示指定**。現行 Opus は既定が `high` のため、xhigh を使うには明示指定が必須。
+> **2026-07-24 更新（Opus 5）**: effort は 5 段階（`low` / `medium` / `high` / `xhigh` / `max`）。**Opus 5 のデフォルトは `high`**（旧 Opus 4.7 のみ `xhigh`。**2026-09-22 以降の現行 Opus 5.5 は `medium`**）。公式推奨は「コーディング/エージェントは `xhigh`、それ以外の知能重視は `high` を基準に eval で per-route 調整」。現行 Opus では **`low`/`medium` でも品質が高い** ため、コスト削減はまず effort を下げて評価する。`max` は Opus 系と Sonnet・Fable で利用可。
+> **注意**: `/effort high` は Opus 5 / Sonnet 5 のデフォルト（現行 Opus 5.5 のデフォルトは `medium`）。意識的にコストを下げたい場合は `medium` または `low` を指定する。
+> **Opus 推奨**: 台本生成品質の観点から **`/model opus` + `/effort xhigh` を明示指定**。現行 Opus 5.5 は既定が `medium` のため、xhigh を使うには明示指定が必須。
 > **`ultracode`（Opus 系セッション限定）**: `xhigh` + Dynamic Workflows（`/workflows`）。大規模・多エージェント作業の動的オーケストレーション。`settings.json` には書けない（セッション内のみ）。1ターンだけ深い推論が欲しい場合は `ultrathink` キーワードをプロンプトに含める（effort 設定は変わらない）。
 
 **effort がサブエージェントに与える影響**:
@@ -73,7 +75,7 @@ Claude Code セッション内で思考の深度を設定できる。API レベ�
 - サブエージェントプロンプトに「簡潔に・要点のみ」等の指示を入れることで間接的に出力量を削減できる
 
 **推奨**:
-- 台本生成（**`opus`** 使用時）: `/effort xhigh` を **明示指定**（現行 Opus の既定は `high`）。コーディング/エージェント/知能重視に最適
+- 台本生成（**`opus`** 使用時）: `/effort xhigh` を **明示指定**（現行 Opus 5.5 の既定は `medium`）。コーディング/エージェント/知能重視に最適
 - Sonnet 5 で通常作業: `/effort medium` でコスト削減
 - 定型・ルーティング判断: `/effort low` で高速化
 

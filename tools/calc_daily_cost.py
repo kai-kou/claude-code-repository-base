@@ -52,9 +52,10 @@ from pathlib import Path
 # ───────────────────────────────
 PRICING: dict[str, dict[str, float]] = {
     # エイリアス指定（opus/sonnet/haiku）でも単価を引けるようにする（agent-team.md「モデル指定の方針」）
-    "opus":                          {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
+    "opus":                          {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},  # 解決先 = Opus 5.5（2026-09-22〜）
     "sonnet":                        {"input": 3.0,  "cache_write": 3.75, "cache_read": 0.3,  "output": 15.0},
     "haiku":                         {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},
+    "claude-opus-5-5":               {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},
     "claude-opus-5":                 {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
     "claude-opus-4-8":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
     "claude-opus-4-7":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},

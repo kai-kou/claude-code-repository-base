@@ -38,7 +38,7 @@
     },
     "engine_version": {
       "type": "string",
-      "description": "実行モデル識別子（エイリアス既定。例: opus, sonnet。ピン留め時は claude-opus-5 等の full ID）"
+      "description": "実行モデル識別子（エイリアス既定。例: opus, sonnet。ピン留め時は claude-opus-5-5 等の full ID）"
     },
     "sections": {
       "type": "array",
