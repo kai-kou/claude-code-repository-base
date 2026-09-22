@@ -212,7 +212,7 @@ python3 tools/run_deep_research_workflow.py {ID}
 - **EXIT=6（レート枠超過）→ Step 3.6（スキップ判定）へ**。**DIY に即落とさない**。
 - **EXIT=2（入力不足）→ ユーザー報告**（プロンプト未生成）。
 
-> モデルは既定 **Opus**（`DEFAULT_ENGINE_MODEL=opus`・エイリアスなので世代交代に自動追随）。コスト/時間削減が必要なら `--max-budget-usd` を下げるか DIY を使う。
+> モデルは既定 **Opus**（`DEFAULT_ENGINE_MODEL=opus`・エイリアスなので世代交代に自動追随）、effort は既定 **`high`**（`--engine-effort` で変更可。未指定だと Opus 5.5 は `medium` に下がるため明示している・#698）。コスト/時間削減が必要なら `--max-budget-usd` を下げるか DIY を使う。
 
 ### Step 3.6: レート枠超過時のスキップ判定【Step 3 が EXIT=6（レート枠超過・capacity）のときのみ】
 

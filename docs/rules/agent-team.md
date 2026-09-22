@@ -378,13 +378,13 @@ Claude 4 モデル全般で対応。ツール結果を受け取った後に内�
 - 迷ったら Sonnet を選ぶ。Opus は明確に必要な場合のみ
 - 並列サブエージェントは可能な限り Haiku を使い、コストを抑える
 - 品質が不十分な場合はモデルを上げて再実行する（Haiku → Sonnet → Opus）
-- 台本生成（Phase 3）では `/effort xhigh` + `/model opus` を推奨。現行 Opus は既定 effort が `high` のため xhigh の明示指定が必要
+- 台本生成（Phase 3）では `/effort xhigh` + `/model opus` を推奨。現行 Opus 5.5 は既定 effort が `medium` のため xhigh の明示指定が必要
 
 ### effort によるトークン最適化（メインセッション）
 
-**現時点の制約**: Agent tool のパラメータに `effort` は含まれない（`model` / `isolation` / `run_in_background` のみ）。サブエージェントへの effort 直接指定は不可。メインセッションの `/effort` 設定はサブエージェントに引き継がれない。
+**現時点の制約**: Agent tool のパラメータに `effort` は含まれない（`model` / `isolation` / `run_in_background` のみ）。Agent 呼び出し単位での effort 指定は不可。サブエージェントの effort は **メインセッションの effort を継承** し、サブエージェント定義（`.claude/agents/*.md`）の frontmatter に `effort:` を書けばそれが優先される（公式 sub-agents「Default: inherits from session」・2026-09-22 確認・#698。旧記述「引き継がれない」は誤り）。
 
-**メインセッションの `/effort` は 5 段階（`low` / `medium` / `high` / `xhigh` / `max`）。v2.1.105+ で xhigh が追加。現行 Opus（`opus`）のデフォルトは `high`。旧 Opus 4.7 から切り替えると effort が自動的に `high` にリセットされる点に注意。**
+**メインセッションの `/effort` は 5 段階（`low` / `medium` / `high` / `xhigh` / `max`）。v2.1.105+ で xhigh が追加。現行 Opus 5.5（`opus`）のデフォルトは `medium`（Opus 5 以前は `high`・Opus 4.7 は `xhigh`）。effort はモデルごとに保存されるため、モデルを切り替えると切替先の保存値か既定値になる点に注意。**
 
 **メインセッションの推奨 effort**:
 

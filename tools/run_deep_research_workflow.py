@@ -78,6 +78,9 @@ COST_LOG = REPO_ROOT / "content" / "pipeline-state" / "research_cost_log.jsonl"
 
 DEFAULT_ENGINE_MODEL = "opus"        # エイリアス既定（最新 Opus に自動追随・agent-team.md「モデル指定の方針」）
 DEFAULT_NORMALIZE_MODEL = "sonnet"   # 同上（最新 Sonnet に自動追随）
+# エンジンの effort は明示する（#698）。未指定だとモデル既定に従い、Opus 5.5 は medium（Opus 5 以前は high）に
+# 下がる。コスト・品質の実測（~$18.7/本）は high で較正しているため、既定は high に固定する。
+DEFAULT_ENGINE_EFFORT = "high"
 
 # サブスク週次枠経路（#2562・ユーザー指示 2026-06-04）:
 # claude -p サブプロセスの env から ANTHROPIC_API_KEY を除去して Claude Code Max の
@@ -231,7 +234,7 @@ def read_prompt(research_id: str) -> str:
 
 def _run_claude(prompt: str, model: str, allowed_tools: str | None,
                 max_budget_usd: float | None, timeout: int,
-                work_dir: str | None = None) -> dict:
+                work_dir: str | None = None, effort: str | None = None) -> dict:
     """claude -p を JSON 出力で実行し、パース済み結果 dict を返す。
 
     work_dir を渡すと、その永続ディレクトリを cwd にして実行する（呼び出し側がライフサイクルを
@@ -240,6 +243,8 @@ def _run_claude(prompt: str, model: str, allowed_tools: str | None,
     """
     cmd = ["claude", "-p", prompt, "--model", model, "--output-format", "json",
            "--fallback-model", "sonnet"]
+    if effort:
+        cmd += ["--effort", effort]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
     # サブスク経路（#2562）では API 課金用の予算上限を付けない（上限は週次クォータが担保）。
@@ -357,7 +362,8 @@ def _build_dr_prompt(prompt: str) -> str:
 
 def run_deep_research(prompt: str, model: str, max_budget_usd: float | None,
                       timeout: int = DEFAULT_TIMEOUT_SEC,
-                      allowed_tools: str = SEARCH_ALLOWED_TOOLS) -> tuple[str, float, dict]:
+                      allowed_tools: str = SEARCH_ALLOWED_TOOLS,
+                      effort: str | None = DEFAULT_ENGINE_EFFORT) -> tuple[str, float, dict]:
     """ネイティブ /deep-research をサブプロセス起動し、(report_md, cost, meta) を返す。
 
     #2704: 本文の正本は「永続 work_dir に Write されたファイル」。result（最終メッセージ）は保険として
@@ -368,7 +374,7 @@ def run_deep_research(prompt: str, model: str, max_budget_usd: float | None,
     work_dir = Path(tempfile.mkdtemp(prefix="deepresearch_"))
     try:
         data = _run_claude(dr_prompt, model, allowed_tools, max_budget_usd,
-                           timeout, work_dir=str(work_dir))
+                           timeout, work_dir=str(work_dir), effort=effort)
         result_text = (data.get("result") or "").strip()
         cost = float(data.get("total_cost_usd") or 0.0)
         file_text, harvested = _harvest_report_file(work_dir)
@@ -632,6 +638,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="ネイティブ /deep-research を engine 化（ハイブリッド）")
     ap.add_argument("research_id", nargs="?", help="リサーチ ID（任意の slug・例: my-topic）。--self-test 時は省略可")
     ap.add_argument("--engine-model", default=DEFAULT_ENGINE_MODEL)
+    ap.add_argument("--engine-effort", default=DEFAULT_ENGINE_EFFORT,
+                    choices=["low", "medium", "high", "xhigh", "max"],
+                    help=f"検索サブプロセスの effort（既定: {DEFAULT_ENGINE_EFFORT}・#698）")
     ap.add_argument("--normalize-model", default=DEFAULT_NORMALIZE_MODEL)
     ap.add_argument("--max-budget-usd", type=float, default=DEFAULT_MAX_BUDGET_USD,
                     help=f"検索サブプロセスの予算上限（既定: ${DEFAULT_MAX_BUDGET_USD}）。"
@@ -672,7 +681,8 @@ def main() -> int:
         # 実行時と同じビルダーで組み立てた実プロンプトの先頭をプレビューする（desync 防止・#4699）
         dr = f"{_build_dr_prompt(prompt)[:400]}..."
         print("[dry-run] 検索:", ["claude", "-p", dr, "--model", args.engine_model,
-              "--output-format", "json", "--allowedTools", allowed_tools,
+              "--output-format", "json", "--fallback-model", "sonnet",
+              "--effort", args.engine_effort, "--allowedTools", allowed_tools,
               *(["--max-budget-usd", str(args.max_budget_usd)]
                 if args.max_budget_usd is not None and not USE_SUBSCRIPTION else [])])
         print("[dry-run] 正規化モデル:", args.normalize_model)
@@ -713,11 +723,11 @@ def main() -> int:
             print(f"[0/3] 当月累計 /deep-research ${mtd:.2f}/ゲート${MONTHLY_BUDGET_GATE_USD} ・全体 ${total_mtd:.2f}/上限${MONTHLY_BUDGET_LIMIT_USD}")
         # サブスク/API 両経路で共通: ネイティブ /deep-research を実行する
         budget_note = "サブスク認証" if USE_SUBSCRIPTION else f"上限 ${args.max_budget_usd}"
-        print(f"[1/3] ネイティブ /deep-research 実行中（model={args.engine_model}・{budget_note}）...")
+        print(f"[1/3] ネイティブ /deep-research 実行中（model={args.engine_model}・effort={args.engine_effort}・{budget_note}）...")
         try:
             report_md, cost, meta = run_deep_research(
                 prompt, args.engine_model, args.max_budget_usd, args.timeout,
-                allowed_tools=allowed_tools)
+                allowed_tools=allowed_tools, effort=args.engine_effort)
         except RateLimitedError as exc:
             # レート枠超過（capacity）→ EXIT=6（#2814）。DIY へ即フォールバックせず、
             # research-runner が「スキップ→次スロットで claude -p 再試行」と解釈する終了コード。

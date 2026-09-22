@@ -82,6 +82,8 @@ Claude Code セッション内で思考の深度を設定できる。API レベ�
 **ブラウザ版（claude.ai/code）での effort 設定**:
 - `/effort` コマンドは **CLI 専用**。ブラウザ版では `Unknown skill: effort` エラーになる
 - ブラウザ版は画面下部のステータスバーに **Effort ドロップダウン**（Low/Med/High/Max）がある
+> **2026-09-22 追記（Opus 5.5 の既定 effort 低下・#698）**: effort の解決順は `CLAUDE_CODE_EFFORT_LEVEL` > `--effort` / `/effort` > スキル・サブエージェント frontmatter の `effort` > `modelSettings[<model>].effortLevel`（モデル別保存）> モデル既定（**Opus 5.5 のみ `medium`**・Opus 4.7 は `xhigh`・他は `high`）。**従来のトップレベル `effortLevel` は Opus 5.5 には効かない**（Opus 5 以前にだけ適用される旧形式）ため、Opus 5.5 の既定を変えたいときは `/effort` か `/model` ピッカーで選び直して `modelSettings` に保存させる。`claude -p` で Opus を起動するツールは `--effort` を明示する（`tools/run_deep_research_workflow.py` は `--engine-effort`・既定 `high`）。effort 未指定のスキル・サブエージェントはセッションの effort を継承するため、メインが Opus 5.5 だと `medium` で動く。
+
 - **最も効果的な方法**: スキルの frontmatter に `effort:` を設定すると、スキル実行中のみ自動的に effort が切り替わる（下記参照）
 
 ### スキル frontmatter の `effort` フィールド（ブラウザ版でも有効）
@@ -106,7 +108,7 @@ effort: high   # このスキル実行中のみ effort: high が適用される
 | `low` | `refinement`, `retro-try-handler` |
 | （未設定） | その他のスキル |
 
-> **2026-07-24 更新**: `script-writer` は `effort: xhigh`。現行 Opus はデフォルト effort が `high` のため、frontmatter で `xhigh` を明示することで台本生成時のみ深い推論を確保する（旧: Opus 4.8 + xhigh）。
+> **2026-07-24 更新**: `script-writer` は `effort: xhigh`。当時の Opus 5 はデフォルト effort が `high`（2026-09-22 以降の Opus 5.5 は `medium`）のため、frontmatter で `xhigh` を明示することで台本生成時のみ深い推論を確保する（旧: Opus 4.8 + xhigh）。
 
 ### `/advisor` コマンドと Advisor Tool（2026-04 確認済み）
 
