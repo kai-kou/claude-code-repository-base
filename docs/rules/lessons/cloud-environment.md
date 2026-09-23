@@ -13,7 +13,7 @@
 | `E2BIG: argument list too long` で全 Bash が停止 | L-106 |
 | `gh` が 403 を返す（`[gh-shim]` ガイダンスが出る） | L-114 |
 | スコープ外リポジトリへの `git clone` / `ls-remote` が 403、`add_repo` が無い | L-117 |
-| scheduled trigger セッションで `gh`（シム含む）が `FileNotFoundError`（command not found） | L-133 |
+| scheduled trigger セッションで `gh`（シム含む）が `FileNotFoundError`（command not found） になることがある | L-133 |
 
 ---
 
@@ -165,24 +165,23 @@ GitHub Issue/PR からの自動トリガー型タスクにも scheduled trigger 
 
 ---
 
-## L-133: scheduled trigger セッションでは `CLAUDE_ENV_FILE` が未設定で、gh シムの PATH 注入が persist しない（2026-09-14・#656）
+## L-133: scheduled trigger セッションで `CLAUDE_ENV_FILE` が未設定のとき、gh シムの PATH 注入が persist しないことがある（2026-09-14 発生・2026-09-23 対策実装 + 独立再検証・#656・#658）
 
-**症状**: R-1（4 時間ごとの scheduled trigger）セッションで `check_pending_pr_reviews.py` を実行すると、
-`session-start.sh` が `[gh-shim] enabled` を出力したにもかかわらず、後続の Bash 呼び出しで
-`gh` が **`FileNotFoundError`（command not found）** になる（`gh api user` の 403 ではなく、
-シェルが `gh` というコマンド自体を見つけられない）。
+**症状（2026-09-14 初回観測）**: R-1（4 時間ごとの scheduled trigger）セッションで
+`check_pending_pr_reviews.py` を実行すると、`session-start.sh` が `[gh-shim] enabled` を出力した
+にもかかわらず、後続の Bash 呼び出しで `gh` が **`FileNotFoundError`（command not found）** になる
+（`gh api user` の 403 ではなく、シェルが `gh` というコマンド自体を見つけられない）。
 
-**根本原因（2026-09-14 実機確認・R-1 自身のセッションで検証）**:
+**根本原因仮説（2026-09-14 実機確認・R-1 自身のセッションで検証）**:
 - `session-start.sh` は `.claude/bin`（gh シム）を **フック実行中のプロセス内でのみ** `PATH` に
   `export` する。後続の Bash tool 呼び出しへ persist させる手段は `env_persist()`（`CLAUDE_ENV_FILE`
   への追記）のみで、`CLAUDE_ENV_FILE` が未設定なら `env_persist()` は無条件で no-op になる
   （`session-start.sh:46-51`）。
-- 実機確認: R-1 セッションでは `CLAUDE_ENV_FILE` が **未設定**（`echo ${CLAUDE_ENV_FILE:-<unset>}` →
-  `<unset>`）。つまり `.claude/bin` の PATH 注入はフック終了と同時に失われ、以後どの Bash 呼び出しでも
-  `gh`（シムを含む）が PATH 上に存在しない。
+- 実機確認: 当時の R-1 セッションでは `CLAUDE_ENV_FILE` が **未設定**（`echo ${CLAUDE_ENV_FILE:-<unset>}` →
+  `<unset>`）であり、後続の Bash 呼び出しで実際に `gh`（シムを含む）が PATH 上に見つからなかった。
 - これは `docs/rules/github-mcp-fallback-patterns.md` §1.5 が前提としている
   「SessionStart フックが `.claude/bin` を PATH 先頭に注入する」が **`CLAUDE_ENV_FILE` 提供時のみ
-  成立する条件付きの事実** であることを意味する。scheduled trigger セッションはその条件を満たさない。
+  成立する条件付きの事実** であることを意味する。
 - **L-114（gh api user は 200・repo REST が 403）とは別の障害モード**: L-114 は「gh 実体には到達できるが
   API 権限で弾かれる」ケース、本エントリは「gh 実体（シム含む）に **到達すらできない**」ケース。
   両方とも「クラウドでは gh を当てにしない」という結論は同じだが、エラーメッセージの切り分け
@@ -193,10 +192,29 @@ GitHub Issue/PR からの自動トリガー型タスクにも scheduled trigger 
   `mcp__github__*` を直接の一次経路にする（`session-start.sh` の既存方針・Issue #249 と同じ結論）。
   `check_pending_pr_reviews.py` 等 gh 依存スクリプトは「失敗したらフォールバック」ではなく
   「scheduled trigger では最初から呼ばない」設計に倒す方が無駄な subprocess 起動を避けられる。
-- `CLAUDE_ENV_FILE` に依存しない PATH persist 方式（例: `~/.bashrc` 先頭への source 行追記。
-  `session-start.sh:184-194` が GitHub リポジトリ変数（`gh_vars.py` 由来）の伝搬で既に使っている手法）
-  への一般化は、本エントリでは行わない（scheduled trigger 全体への影響範囲が広く、検証を要する
-  別スコープ。follow-up Issue #658 で扱う）。
+- **実装（2026-09-23・Issue #658 で対応・#656 follow-up）**: `CLAUDE_ENV_FILE` に依存しない PATH persist を
+  `~/.bashrc` 先頭への source 行追記で実装した（`session-start.sh` の gh シム有効化ブロック。GitHub
+  リポジトリ変数の伝搬で既に使っている手法と同型）。**検証結果**: 実環境の `~/.profile` は
+  `[ "$BASH" ] && [ -f ~/.bashrc ] && . ~/.bashrc` を無条件実行するため、`.bashrc` 冒頭（非対話シェルの
+  早期 return より前）に注入した PATH 設定は login シェル（`bash -l`）経由でも正しく伝搬することを
+  `.profile`/`.bashrc` を複製した隔離 HOME で確認した（`env -i HOME=<tmp> PATH=... bash -lc 'echo $PATH'`
+  が shim ディレクトリを含む）。ただし **この検証は通常セッションでの再現実験** であり、R-1 の
+  scheduled trigger セッション自身（`claude -p` 等・本エントリの元検証と同じ起動経路）での実機再確認は
+  未実施（次回 R-1 実行時に `command -v gh` で確認する）。
+- **独立した再検証（同日 2026-09-23・上記実装より前の `session-start.sh` を使った別 scheduled trigger
+  セッション自身で実施・1 回の観測）**: 上記の `~/.bashrc` 実装が main へ入る **前** に、別セッション
+  （`CLAUDE_CODE_ENTRYPOINT=remote_trigger`）で `CLAUDE_ENV_FILE` が `<unset>` のまま `which gh` /
+  `type gh` を実行したところ、いずれも `.claude/bin/gh` に解決し、`gh --version` もそのシムに到達して
+  実行された（`exit 127` はシム自身が「実 gh 不在」時に意図して返す終了コード・`tools/gh_shim.py:941`・
+  bash 標準の command-not-found と同じ値を模しているため、それ単体では「シムに到達した／していない」を
+  区別する根拠にはならない点に注意。根拠は `which`/`type` の PATH 解決結果）。
+  → 上記実装が無い状態でも `CLAUDE_ENV_FILE` 未設定で PATH 注入が persist するケースが存在し、
+  「`env_persist()` のみが persist 手段」という根本原因仮説は少なくとも今回の環境では成立しなかった
+  （原因は未特定・ハーネス側のセッション env 伝搬方式やセッション種別による違いの可能性があるが、
+  1 回の観測のため一般化しない）。**この観測は `~/.bashrc` 実装の要否を否定するものではない**
+  （persist しないケースが実在することは 2026-09-14 の観測が示す通りであり、恒久対策として実装した
+  上記が正しい対応方針）。次回 R-1 実行時の実機確認では、この「実装前から persist するケースがある」
+  という事実も踏まえ、効果測定は複数回の観測で判断する。
 - 本エントリの実測が古くなったら（`CLAUDE_ENV_FILE` が scheduled trigger でも供給されるようになったら）
   `github-mcp-fallback-patterns.md` §1.5 と本エントリを同一 PR で更新する（CP-2）。
 

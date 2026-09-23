@@ -226,6 +226,14 @@ background 実行（v2.1.198 以降の既定）では、**サブエージェン�
 経過時間の監視ではなく「他の参加者が揃ったのに 1 名分だけ届かない」状態で行う）。これも「完了したか」を
 探る確認ではなく `SendMessage` による生存確認であり、繰り返さない。
 
+**長時間待機時のセッション維持（実測・2026-09-23・#652）**: 単一の background サブエージェント（`sleep 720`
+で 12 分間＝723 秒待機させるタスク）を起動し、親セッションはポーリングせず **ターンを終えるだけ** で待った
+ところ、完了通知は正常に届き、セッションのアイドルタイムアウトは発生しなかった（実測: 開始 14:28:26 JST →
+終了 14:40:29 JST）。**10 分超の単一サブエージェント待機でも「ターンを終えて待つ」の作法だけで十分**（追加の
+維持手段は不要）。この実測は 12 分・単一サブエージェントの 1 ケースに限る。複数サブエージェントの同時待機や
+20 分超の極端な長時間待機は未検証のため、それらで異常を観測した場合は本節と
+`docs/rules/lessons/agent-delegation.md` L-132 に追記する。
+
 ### F-9. 3 種類の上限（超過は spawn 失敗として返る・#375）
 
 | 上限 | 既定 | 環境変数 | 超過時のエラー |
@@ -299,7 +307,7 @@ background 実行（v2.1.198 以降の既定）では、**サブエージェン�
 | Opus 4.8（legacy） | `claude-opus-4-8` | 1M トークン | $5 / $25 | Adaptive Thinking | `xhigh`（既定は `high`） | Opus 5 への移行期の代替。2026-05-28・v2.1.154 でデフォルト化された旧世代 |
 | Opus 4.7（legacy） | `claude-opus-4-7` | 1M トークン | $5 / $25 | Adaptive Thinking | `xhigh` | さらに旧世代。SWE-bench Pro 64.3%（2026-04-16 リリース） |
 | Opus 4.6（legacy） | `claude-opus-4-6` | 1M トークン | $5 / $25 | Adaptive Thinking | `max` | さらに旧世代。新規利用は非推奨 |
-| **Sonnet 5** | `claude-sonnet-5` | 1M トークン | $3 / $15 | Adaptive Thinking | `medium` | メインセッションのデフォルト、実装エージェント、PR作成・レビュー対応 |
+| **Sonnet 5** | `claude-sonnet-5` | 1M トークン | $2 / $10 | Adaptive Thinking | `medium` | メインセッションのデフォルト、実装エージェント、PR作成・レビュー対応 |
 | **Haiku 4.5** | `claude-haiku-4-5` | 200K トークン | $1 / $5 | Extended Thinking | — | ファイル探索、パターン検索、セルフレビューの個別チェック（組み込み `Explore` はメイン継承のため §F-6 の上書き定義が必要） |
 
 > **Opus 5.5（`claude-opus-5-5`・現行 Opus・2026-09-22）**: Opus 5 の後継。$4 / $20（cache write 5m $5・cache read $0.20）で 1M コンテキスト・128K 出力・prompt cache 最小 512 トークンは据え置き。**デフォルト effort は `medium`**（Opus 5 は `high`）。Opus 5 から動いていた API コードに効く破壊的変更は 4 つ: ① **thinking を無効化できない** ② **forced tool use（`tool_choice` で特定ツール/any 強制）がエラー** ③ **thinking ブロックは生成したモデルと会話に紐づく**（他モデルの thinking ブロックを持ち回さない） ④ Claude API / Google Cloud では旧 `computer_20251124` ツールを受け付けない。加えて **ツール呼び出し間のテキストが `thinking` ブロックで返る**（既定 `display` では空）ため、途中テキストを進捗表示に使う実装は `display` 設定が要る。①〜③ は Fable 5.1 にも該当。本リポジトリの運用ファイルは `opus` エイリアス指定のため無修正で追随する（API 直叩き・forced tool use・thinking 無効化の実装は 2026-09-22 時点で無し・#695）。

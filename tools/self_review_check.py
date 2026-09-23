@@ -12,6 +12,7 @@ Error 検出時（exit 1）に PR 作成をブロックする「Lv3 ハードコ
   - Error: 対応テスト失敗（変更ファイルに対応する tools/test_<name>.sh を自動実行・Issue #627。
     SELF_REVIEW_SELFTEST=warn で Warning に降格）
   - Warning: デバッグ痕跡（TODO/FIXME/console.log/print デバッグ等）※ブロックしない
+  - Warning: 絶対パス文字列の重複ハードコード（同一ファイル内で同じ絶対パスが3箇所以上・Issue #672）
   - Warning: shellcheck 指摘（shellcheck 導入済み環境のみ・-S warning・Issue #627）
   - Warning: ruff E9/F63/F7/F82（ruff 導入済み環境のみ・変更された .py が対象・Issue #627）
 
@@ -78,6 +79,26 @@ except Exception as _e:  # noqa: BLE001
     print(f"[self-review] Warning: scan_dangerous_patterns の読み込みに失敗（危険パターン検査を無効化）: {_e}",
           file=sys.stderr)
     _scan_py = None
+
+
+# 絶対パス文字列リテラルの重複ハードコード検出（Issue #672: publish-sync/SKILL.md で検証成功
+# マーカーの絶対パスが 4 箇所に分散し、改修時に一部だけ更新漏れするケースが Layer1 週次分析で
+# 2 PR 以上・同種指摘として観測された）。定数化していれば 1 箇所の変更で足りるところを、
+# コピペで散らばせると改修漏れの温床になる。クォート（'/"/`）で囲まれた 3 セグメント以上の
+# 絶対パスのみを対象にし、短い相対パスの偶然一致を拾わないようにする。
+_PATH_LITERAL_RE = re.compile(r"""(['"`])(/(?:[\w.-]+/){2,}[\w.-]+)\1""")
+
+
+def duplicate_path_literal_warnings(f: str, text: str) -> list[str]:
+    """同一ファイル内で同じ絶対パス文字列リテラルが 3 回以上ハードコードされていたら Warning にする。"""
+    counts: dict[str, int] = {}
+    for m in _PATH_LITERAL_RE.finditer(text):
+        counts[m.group(2)] = counts.get(m.group(2), 0) + 1
+    hits = sorted(((p, n) for p, n in counts.items() if n >= 3), key=lambda kv: -kv[1])
+    return [
+        f"絶対パス文字列の重複ハードコード: {f}: '{p}' が {n} 箇所（定数化・変数化を検討してください）"
+        for p, n in hits[:3]
+    ]
 
 
 def cjk_violation_lines(text: str) -> list[int]:
@@ -773,6 +794,9 @@ def main() -> int:
             low = line.lower()
             if "console.log(" in low or "debugger;" in low or "import pdb" in low:
                 warnings.append(f"デバッグ痕跡の可能性: {f}:{i}")
+
+        # 絶対パス文字列の重複ハードコード（Issue #672）
+        warnings.extend(duplicate_path_literal_warnings(f, text))
 
         # CJK Markdown 半角スペース（CLAUDE.md「Markdown 出力ルール」）
         # 目視では見落とすため機械化（AI レビュアーの同種指摘を未然に防ぐ）

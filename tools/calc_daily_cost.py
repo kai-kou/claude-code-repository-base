@@ -53,7 +53,7 @@ from pathlib import Path
 PRICING: dict[str, dict[str, float]] = {
     # エイリアス指定（opus/sonnet/haiku）でも単価を引けるようにする（agent-team.md「モデル指定の方針」）
     "opus":                          {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},  # 解決先 = Opus 5.5（2026-09-22〜）
-    "sonnet":                        {"input": 3.0,  "cache_write": 3.75, "cache_read": 0.3,  "output": 15.0},
+    "sonnet":                        {"input": 2.0,  "cache_write": 2.5,  "cache_read": 0.2,  "output": 10.0},  # 解決先 = Sonnet 5
     "haiku":                         {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},
     "claude-opus-5-5":               {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},
     "claude-opus-5":                 {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
@@ -61,7 +61,7 @@ PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-7":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
     "claude-opus-4-6":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
     "claude-opus-4-5":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
-    "claude-sonnet-5":               {"input": 3.0,  "cache_write": 3.75, "cache_read": 0.3,  "output": 15.0},
+    "claude-sonnet-5":               {"input": 2.0,  "cache_write": 2.5,  "cache_read": 0.2,  "output": 10.0},
     "claude-sonnet-4-6":             {"input": 3.0,  "cache_write": 3.75, "cache_read": 0.3,  "output": 15.0},  # legacy（過去ログ集計用）
     "claude-sonnet-4-5":             {"input": 3.0,  "cache_write": 3.75, "cache_read": 0.3,  "output": 15.0},
     "claude-haiku-4-5-20251001":     {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},

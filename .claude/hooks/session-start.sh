@@ -61,6 +61,28 @@ if [ -x "${_shim_dir}/gh" ]; then
     *) export PATH="${_shim_dir}:${PATH}" ;;
   esac
   env_persist "export PATH=\"${_shim_dir}:\${PATH}\""
+  # ~/.bashrc 先頭への source 行追記（CLAUDE_ENV_FILE 未提供の resume / scheduled trigger でも
+  # PATH 注入を伝搬させる・Issue #658）。GitHub Variables 自動ロード（下記）と同型のパターンで、
+  # 非対話シェルの早期 return（`[ -z "$PS1" ] && return`）より前に実行されるよう先頭へ挿入する。
+  _shim_bashrc="${HOME}/.bashrc"
+  _shim_marker="# gh-shim-path-autoload"
+  if [ -f "$_shim_bashrc" ] && ! grep -qF "$_shim_marker" "$_shim_bashrc" 2>/dev/null; then
+    _shim_tmprc=$(mktemp)
+    # `if !` で囲み、cat 失敗（並行プロセスによる ~/.bashrc 削除等）で set -e がフック全体を
+    # 中断させないようにする（中断すると後続の TZ/GH_TOKEN 等の初期化も丸ごと失われる・Layer 1 指摘）。
+    # 失敗時は tmpfile を回収し、~/.bashrc は変更しない（次回セッションで再試行される）。
+    if ! {
+      echo "${_shim_marker}"
+      echo "case \":\${PATH}:\" in *\":${_shim_dir}:\"*) ;; *) export PATH=\"${_shim_dir}:\${PATH}\" ;; esac"
+      echo ""
+      cat "$_shim_bashrc"
+    } > "$_shim_tmprc"; then
+      rm -f "$_shim_tmprc"
+    else
+      mv "$_shim_tmprc" "$_shim_bashrc"
+    fi
+  fi
+  unset _shim_bashrc _shim_marker _shim_tmprc
   echo "[gh-shim] enabled: ${_shim_dir}/gh (GH_SHIM=off で無効化可)" >&2
 fi
 

@@ -301,6 +301,30 @@ printf '%s' "$REVIEW_OUT" | grep -q '検証証跡なし' \
   || report ok "コマンド＋結果を含む証跡は検出なしと判定されない"
 teardown_repo
 
+echo "[ケース 9] 絶対パス文字列の重複ハードコード（Issue #672）→ 3 箇所以上で Warning・exit=0（ブロックしない）"
+setup_repo
+git -C "$WORK/repo" checkout --quiet -b feat/dup-path main
+cat > "$WORK/repo/dup_path.py" <<'EOS'
+MARKER_A = "/tmp/verified/marker"
+MARKER_B = "/tmp/verified/marker"
+MARKER_C = "/tmp/verified/marker"
+OTHER = "/tmp/other/path/x"
+EOS
+git -C "$WORK/repo" add -A
+git -C "$WORK/repo" commit --quiet -m "add duplicate absolute path fixture"
+
+run_review feat/dup-path
+[ "$REVIEW_EXIT" -eq 0 ] \
+  && report ok "絶対パス重複は Warning のみで exit=0（ブロックしない）" \
+  || report ng "exit=${REVIEW_EXIT}（期待 0）（出力: ${REVIEW_OUT}）"
+printf '%s' "$REVIEW_OUT" | grep -q "絶対パス文字列の重複ハードコード: dup_path.py: '/tmp/verified/marker' が 3 箇所" \
+  && report ok "3 箇所以上の絶対パス重複が Warning として検出される" \
+  || report ng "絶対パス重複の Warning が無い（出力: ${REVIEW_OUT}）"
+printf '%s' "$REVIEW_OUT" | grep -q "/tmp/other/path/x" \
+  && report ng "2 箇所しか登場しないパスまで誤検出している（出力: ${REVIEW_OUT}）" \
+  || report ok "2 箇所だけの絶対パスは誤検出しない"
+teardown_repo
+
 echo
 echo "結果: PASS=${PASS} FAIL=${FAIL}"
 [ "$FAIL" -eq 0 ] || exit 1

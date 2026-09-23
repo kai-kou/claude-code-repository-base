@@ -91,6 +91,8 @@
 | ☐ | コマンドインジェクション・任意コード実行（`shell=True`+非定数・`eval`/`exec`・`os.system`・`pickle.load`・`yaml.load` 非 Safe） | **機械**（`scan_dangerous_patterns.py` DP101-106・Error でブロック） | #56（FAIR Layer 0 強化・動作確認 #55 で見逃し検出） |
 | ☐ | 並行セッション競合（ローカルファイル排他・TOCTOU） | 目視 | 90 件（CP-4） |
 | ☐ | ハードコード値の定数化・出所コメント | 目視 | 86 件 |
+| ☐ | 同一ファイル内で同じ絶対パス文字列を 3 箇所以上コピペしていないか（定数化すれば 1 箇所の変更で足りる） | **機械**（`self_review_check.py` の `duplicate_path_literal_warnings()`・Warning） | Issue #672（publish-sync/SKILL.md の検証成功マーカー絶対パス 4 箇所重複が実例） |
+| ☐ | パーサー・集計処理（load/aggregate 系）が不正フォーマット・不正エンコーディングの行で未捕捉例外を投げず、該当行をスキップして Warning に倒す設計になっているか | 目視 | Issue #672（layer1_findings_report.py の実例） |
 | ☐ | 変更した `tools/`・`scripts/` の Python ファイルが `--self-test` を持つ場合、その self-test が通るか | **機械**（`self_review_check.py` の `self_test_errors()`・Error でブロック。`SELF_REVIEW_SELFTEST=warn` で非ブロック化可） | Issue #508 |
 
 ## 4. ドキュメント・スキル（`docs/` `.claude/` `CLAUDE.md`）
@@ -103,6 +105,7 @@
 | ☐ | gh コマンドは `-R __OWNER__/__REPO__` 統一（`--repo` 不可） | **機械** | CLAUDE.md 規約 |
 | ☐ | 既存 SSOT との重複定義を作っていないか（要約を置くなら SSOT 参照を併記） | 目視 | L-095 |
 | ☐ | 配布対象ドキュメント（`docs/rules/` `.claude/skills/`）の新規記述で Issue/PR 番号を **単独の論拠** にしていないか（番号は下流リポジトリでは別 Issue を誤指しする。恒久的に意味が通る説明を本文に書き、番号は出典補足に留める） | 目視 | Issue #211（下流誤リンク） |
+| ☐ | 新設・改訂した基準文書（REVIEW.md 等の較正基準・数値閾値）が、同一 PR の実装側変更を反映済みの版を参照しているか（作業ツリー版でまだ緩い旧基準のまま較正していないか）。文書内のハードコード閾値と実装側の定数・設定ファイルが一致しているか | 目視 | Issue #672 |
 | ☐ | CJK 強調記法の前後半角スペース（`python3 tools/check_cjk_markdown.py --fix --changed` で自動整形） | **機械** | CLAUDE.md 規約（旧「目視」ですり抜け頻発 → 機械化） |
 
 ## 5. Remotion / TypeScript（`remotion/`）
