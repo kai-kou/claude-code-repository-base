@@ -377,10 +377,12 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 # 同梱ツール本体の探索先は repo_root（git 操作対象＝消費先プロジェクト）ではなく
 # CLAUDE_PLUGIN_ROOT（プラグイン配布時にハーネスが設定・実測確認済み）を優先する。
 # 分離しないと、tools/ を持たない第三者プロジェクトでこのゲートがサイレントに無効化される（#539）。
-# 値は絶対パス形式のときのみ採用する（空文字・相対パス等の想定外値は repo_root へフォールバック）。
+# 値は絶対パス形式 **かつ実際にツールを同梱している** ときだけ採用する（空文字・相対パス・
+# tools/ を持たないプラグインルートは repo_root へフォールバック。存在確認を省くと、消費先に
+# tools/ が実在するのにゲートが Warning だけの実質無効へ落ちる・下流 Layer 1 指摘）。
 scripts_root="$repo_root"
 case "${CLAUDE_PLUGIN_ROOT:-}" in
-  /*) scripts_root="$CLAUDE_PLUGIN_ROOT" ;;
+  /*) [ -f "$CLAUDE_PLUGIN_ROOT/tools/self_review_check.py" ] && scripts_root="$CLAUDE_PLUGIN_ROOT" ;;
 esac
 check_output=""
 if [ -f "$scripts_root/tools/self_review_check.py" ]; then

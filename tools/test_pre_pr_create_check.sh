@@ -29,6 +29,8 @@
 #      #627 Layer 1 再レビュー指摘）
 #  13. PR 本文を self_review_check.py に渡す一時ファイル（claude-prbody.*）が、フック正常終了後に
 #      残留しない（trap EXIT による削除・#628 Layer 1 テスト・検証指摘）
+#  14. CLAUDE_PLUGIN_ROOT が絶対パスでも tools/self_review_check.py を同梱していなければ repo_root の
+#      tools/ へフォールバックし、本文チェックが実行される（存在確認なしで採用すると Warning だけの実質無効へ落ちる）
 #
 # has_code / high_risk の判定対象は一時リポジトリの git 差分そのもの（tools/detect_pr_diff_type.py
 # を base コミットへ同梱して一時リポジトリ内でも実行できるようにし、フィクスチャファイルの追加で
@@ -431,6 +433,21 @@ _tmp_after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'claude-prbody.*' 2>/dev/n
 [ "$_tmp_before" = "$_tmp_after" ] \
   && report ok "trap による一時ファイル削除が機能し、残留ファイルが増えない" \
   || report ng "一時ファイルが残留した（前: [${_tmp_before}] 後: [${_tmp_after}]）"
+teardown_repo
+
+echo "[ケース 14] CLAUDE_PLUGIN_ROOT に tools/ が無ければ repo_root の self_review_check.py を使う"
+setup_repo
+_empty_plugin_root=$(mktemp -d)
+CLAUDE_PLUGIN_ROOT="$_empty_plugin_root" run_hook "$(mcp_json "$BAD_BODY")"
+_ctx14=$(ctx_of "$HOOK_STDOUT")
+printf '%s' "$_ctx14" | grep -q 'self_review_check.py が見つからないため' \
+  && report ng "tools/ を持たないプラグインルートを採用し本文チェックがスキップされた（additionalContext: ${_ctx14}）" \
+  || report ok "tools/ を持たないプラグインルートは採用しない"
+_n14=$(count_new_warnings "$_ctx14")
+[ "$_n14" -eq 2 ] \
+  && report ok "repo_root へフォールバックして本文チェックが実行される（新規 Warning 2 件）" \
+  || report ng "新規 Warning が ${_n14} 件（期待 2・additionalContext: ${_ctx14}）"
+rm -rf "$_empty_plugin_root"
 teardown_repo
 
 echo

@@ -90,7 +90,12 @@ run_case BLOCK "worktree 内のフックは再び保護（Layer 1 指摘）" 'se
 run_case BLOCK "mv でフックを外へ移す（移動元の除去・Layer 1 指摘）" 'mv .claude/hooks/pre-tool-use-router.sh /tmp/demo-out/x'
 run_case BLOCK "リンク元が docs/rules 外の .claude/rules への symlink（Layer 1 指摘）" 'ln -sf /etc/passwd .claude/rules/evil.md'
 run_case BLOCK "symlink 以外の .claude/rules 書き込み" 'echo x > .claude/rules/new.md'
-run_case ALLOW "cd - は判定不能として素通り（見逃しを承知で誤断定より安全側）" 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'
+run_case BLOCK "cd - は直前の cwd へ戻る（下流 Layer 1 指摘・判定不能に倒すと後続が丸ごと素通りする）" \
+  'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'
+run_case BLOCK "直前が無い cd - は cwd 据え置き（#578 の作業領域外ガードを無効化しない）" \
+  'cd - && rm -rf ../../../tmp/demo-out'
+run_case BLOCK "worktrees ディレクトリごとの削除は保護（除外は <name> 配下だけ）" 'rm -rf .claude/worktrees'
+run_case ALLOW "worktree 内の通常の作業は対象外" 'rm -rf .claude/worktrees/wt-1/build'
 run_case ALLOW "scratchpad 内のラボの .claude は対象外" \
   "sed -i 's/a/b/' /tmp/claude-0/demo/$TEST_SESSION/scratchpad/lab/.claude/hooks/dummy.sh"
 run_case ALLOW "前置きトグルで .git 配下の復旧操作を通す" \
@@ -186,6 +191,35 @@ if [ $? -eq 0 ] && [ -z "$toggle_out" ]; then
 else
   FAIL=$((FAIL + 1)); echo "  NG   トグルが効いていない" >&2
 fi
+
+echo "[test] 実 symlink を持つフィクスチャ（既存名を狙う経路・下流 Layer 1 指摘）"
+# TEST_CWD は実在しないディレクトリなので realpath が文字列正規化しかせず、symlink 挙動を 1 件も
+# 踏めていなかった。`.claude/rules/*` は全件が docs/rules への symlink なので、既存名を宛先にした
+# 張り替え・削除がリンク先へ化けて素通りしないことを実ファイルで固定する。
+fixture=$(mktemp -d)
+mkdir -p "$fixture/docs/rules" "$fixture/.claude/rules"
+: > "$fixture/docs/rules/x.md"
+ln -s ../../docs/rules/x.md "$fixture/.claude/rules/x.md"
+run_fixture_case() {
+  local expect="$1" desc="$2" cmd="$3"
+  local payload output status actual
+  payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"session_id":sys.argv[3],"tool_input":{"command":sys.argv[2]}}))' "$fixture" "$cmd" "$TEST_SESSION")
+  output=$(printf '%s' "$payload" | HOME="$TEST_HOME" TMPDIR="" python3 "$GUARD" 2>&1)
+  status=$?
+  if [ "$status" -eq 1 ]; then actual="BLOCK"; else actual="ALLOW"; fi
+  if [ "$actual" = "$expect" ]; then
+    PASS=$((PASS + 1)); printf '  ok   [%s] %s\n' "$expect" "$desc"
+  else
+    FAIL=$((FAIL + 1)); printf '  NG   期待=%s 実際=%s : %s\n       cmd: %s\n' "$expect" "$actual" "$desc" "$cmd" >&2
+    [ -n "$output" ] && printf '       out: %s\n' "$(printf '%s' "$output" | head -3 | tr '\n' ' ')" >&2
+  fi
+}
+run_fixture_case BLOCK "既存 symlink の張り替え（Hot 層ルールを外部ファイルへ向け替える）" 'ln -sf /etc/passwd .claude/rules/x.md'
+run_fixture_case BLOCK "既存 symlink の削除（常駐ルールの無言デタッチ）" 'rm -f .claude/rules/x.md'
+run_fixture_case BLOCK "既存 symlink 越しの追記" 'echo x >> .claude/rules/x.md'
+run_fixture_case ALLOW "正規手順の symlink 再作成（check_rules_sync --fix 相当）" 'ln -sf ../../docs/rules/x.md .claude/rules/x.md'
+run_fixture_case ALLOW "リンク先の実体（docs/rules）は保護対象外" 'sed -i "s/a/b/" docs/rules/x.md'
+rm -rf "$fixture"
 
 echo "[test] ルーター統合（フックが exit 2 でブロックすること）"
 router="$(cd "$(dirname "$0")/.." && pwd)/.claude/hooks/pre-tool-use-router.sh"

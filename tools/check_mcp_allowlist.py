@@ -18,8 +18,9 @@ auto モードの classifier に回る（判定は確率的）か、auto でな�
     `mcp__<server>__<prefix>*` … リテラルなサーバ名の後のツール名 glob
   サーバ名部分の glob（`mcp__*`）は公式に無効（警告付きでスキップされる）なので一致に使わない
 - サーバの母集団: `--mcp-config`（既定 `.mcp.json`）の `mcpServers` キー。ここに無いサーバのツール
-  （例: プラットフォーム注入の `mcp__Claude_Code_Remote__*`・claude.ai コネクタ）は **突合対象外** として
-  別枠で報告する（`.mcp.json` で管理していないため allow に書く前提が成り立たない）
+  （例: プラットフォーム注入の `mcp__Claude_Code_Remote__*`・claude.ai コネクタ）も **`missing` に含める**
+  （`managed: false` で識別）。`.mcp.json` に無くても `permissions.allow` には書けるため（ホスト注入コネクタも
+  対象）、除外すると無人ルーティンが常用する未登録ツールを見逃す（L-130）
 - 除外リスト: `--ignore`（既定 `config/mcp_allowlist_check_ignore.txt`）。1 行 1 パターン
   （ツール名の完全一致か `mcp__<server>__*` 形式）。`#` 以降はコメント。出自プロジェクトの実例など、
   本リポジトリには存在しないサーバのツール名がドキュメントに残っているケースを除く
@@ -160,7 +161,6 @@ def run_check(settings: Path, scan_dirs: list[Path], mcp_config: Path, ignore: P
 
     missing: list[dict] = []
     allowed: list[str] = []
-    unmanaged: list[dict] = []
     skipped: list[str] = []
     for tool, files in refs.items():
         server = _TOOL_RE.fullmatch(tool).group(1)  # refs は _TOOL_RE で抽出済み
@@ -170,10 +170,10 @@ def run_check(settings: Path, scan_dirs: list[Path], mcp_config: Path, ignore: P
         if allow_matches(tool, allow_rules):
             allowed.append(tool)
             continue
-        if servers is not None and server not in servers:
-            unmanaged.append({"tool": tool, "server": server, "files": files})
-            continue
-        missing.append({"tool": tool, "server": server, "files": files})
+        # servers が None（.mcp.json 自体が無い）なら、どのサーバも .mcp.json では管理されていない
+        # ＝ managed は常に False（Layer 1 セルフレビュー指摘）
+        managed = servers is not None and server in servers
+        missing.append({"tool": tool, "server": server, "files": files, "managed": managed})
 
     return {
         "settings": str(settings),
@@ -183,25 +183,23 @@ def run_check(settings: Path, scan_dirs: list[Path], mcp_config: Path, ignore: P
         "referenced": len(refs),
         "allowed": allowed,
         "missing": missing,
-        "unmanaged_server": unmanaged,
         "ignored": skipped,
         "note": REQUIRES_USER_INTERACTION_NOTE,
     }
 
 
 def print_human(result: dict) -> None:
+    unmanaged_count = sum(1 for m in result["missing"] if not m["managed"])
     print(f"[mcp-allowlist] 参照 {result['referenced']} 件 / allow 一致 {len(result['allowed'])} 件 / "
-          f"未登録 {len(result['missing'])} 件 / 管理外サーバ {len(result['unmanaged_server'])} 件 / "
+          f"未登録 {len(result['missing'])} 件（うち管理外サーバ {unmanaged_count} 件） / "
           f"除外 {len(result['ignored'])} 件")
     if result["missing"]:
         print("[mcp-allowlist] ✗ permissions.allow に無い MCP ツール（無人ルーティンが呼ぶなら登録が要る）:")
         for item in result["missing"]:
-            print(f"  - {item['tool']}  ← {', '.join(item['files'])}")
+            tag = "" if item["managed"] else "  [.mcp.json 未記載]"
+            print(f"  - {item['tool']}{tag}  ← {', '.join(item['files'])}")
         print("  登録例: \"mcp__<server>__<tool>\"（個別）/ \"mcp__<server>\"（サーバ全体。書き込み系も無確認になる点に注意）")
-    if result["unmanaged_server"]:
-        print("[mcp-allowlist] ℹ .mcp.json に無いサーバのツール（プラットフォーム注入・コネクタ等。突合対象外）:")
-        for item in result["unmanaged_server"]:
-            print(f"  - {item['tool']}")
+        print("  [.mcp.json 未記載] はホスト注入コネクタ等で .mcp.json に管理定義が無いサーバ。allow には書けるため登録対象。")
     print(f"[mcp-allowlist] {result['note']}")
 
 
@@ -238,18 +236,37 @@ def _self_test() -> int:
             "mcp__legacy__old_tool を参照する\n",
             encoding="utf-8",
         )
+        (root / "agents").mkdir(parents=True)
+        (root / "agents" / "owner.md").write_text(
+            "owner は mcp__github__issue_write と mcp__github__add_issue_comment を使う\n",
+            encoding="utf-8",
+        )
         (root / "settings.json").write_text(json.dumps({"permissions": {"allow": ["mcp__github__list_issues"]}}), encoding="utf-8")
         (root / ".mcp.json").write_text(json.dumps({"mcpServers": {"github": {}, "youtube": {}}}), encoding="utf-8")
         (root / "ignore.txt").write_text("# コメント\nmcp__legacy__*\n", encoding="utf-8")
-        result = run_check(root / "settings.json", [root / "skills"], root / ".mcp.json", root / "ignore.txt")
+        result = run_check(root / "settings.json", [root / "skills", root / "agents"], root / ".mcp.json", root / "ignore.txt")
         missing = sorted(m["tool"] for m in result["missing"])
-        unmanaged = sorted(u["tool"] for u in result["unmanaged_server"])
-        if missing != ["mcp__github__issue_write", "mcp__youtube__list_private"]:
+        expected_missing = [
+            "mcp__Claude_Code_Remote__list_triggers",
+            "mcp__github__add_issue_comment",
+            "mcp__github__issue_write",
+            "mcp__youtube__list_private",
+        ]
+        if missing != expected_missing:
             failures += 1
-            print(f"  NG missing 期待 2 件 実際={missing}")
+            print(f"  NG missing 期待 {expected_missing} 実際={missing}")
+        # .mcp.json 未記載サーバのツールは managed=False で missing に含まれる（unmanaged を対象外にしない）
+        unmanaged = sorted(m["tool"] for m in result["missing"] if not m["managed"])
         if unmanaged != ["mcp__Claude_Code_Remote__list_triggers"]:
             failures += 1
-            print(f"  NG unmanaged 期待 1 件 実際={unmanaged}")
+            print(f"  NG managed=False 期待 1 件 実際={unmanaged}")
+        if sorted(m["tool"] for m in result["missing"] if m["managed"]) != [
+            "mcp__github__add_issue_comment",
+            "mcp__github__issue_write",
+            "mcp__youtube__list_private",
+        ]:
+            failures += 1
+            print(f"  NG managed=True 実際={[m['tool'] for m in result['missing'] if m['managed']]}")
         if result["ignored"] != ["mcp__legacy__old_tool"]:
             failures += 1
             print(f"  NG ignored 実際={result['ignored']}")
@@ -263,6 +280,16 @@ def _self_test() -> int:
             print("  NG settings 不在で例外にならない")
         except ValueError:
             pass
+
+        # .mcp.json 自体が無い（servers is None）→ 母集団を絞らないが、どのサーバも managed=False
+        # （Layer 1 セルフレビュー: managed=True にすると「.mcp.json に書けば直る」という誤った tag 非表示になる）
+        result_no_mcp_config = run_check(root / "settings.json", [root / "skills", root / "agents"], root / "no-such-mcp.json", root / "ignore.txt")
+        if result_no_mcp_config["servers"] is not None:
+            failures += 1
+            print(f"  NG servers 期待 None 実際={result_no_mcp_config['servers']}")
+        if any(m["managed"] for m in result_no_mcp_config["missing"]):
+            failures += 1
+            print(f"  NG .mcp.json 不在時に managed=True が混入 実際={result_no_mcp_config['missing']}")
     print(f"[check_mcp_allowlist --self-test] {'PASS' if failures == 0 else 'FAIL'}（失敗 {failures} 件）")
     return 1 if failures else 0
 
@@ -270,7 +297,15 @@ def _self_test() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="スキルが参照する MCP ツールと permissions.allow の突合")
     ap.add_argument("--settings", default=str(REPO_ROOT / ".claude" / "settings.json"))
-    ap.add_argument("--scan-dirs", nargs="+", default=[str(REPO_ROOT / ".claude" / "skills"), str(REPO_ROOT / ".claude" / "commands")])
+    ap.add_argument(
+        "--scan-dirs",
+        nargs="+",
+        default=[
+            str(REPO_ROOT / ".claude" / "skills"),
+            str(REPO_ROOT / ".claude" / "commands"),
+            str(REPO_ROOT / ".claude" / "agents"),
+        ],
+    )
     ap.add_argument("--mcp-config", default=str(REPO_ROOT / ".mcp.json"))
     ap.add_argument("--ignore", default=str(REPO_ROOT / "config" / "mcp_allowlist_check_ignore.txt"))
     ap.add_argument("--json", action="store_true", help="機械可読（1 行 JSON）")

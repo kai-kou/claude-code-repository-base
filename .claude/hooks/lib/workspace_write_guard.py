@@ -270,6 +270,30 @@ def _resolve(path: str, cwd: str | None, home: str) -> str | None:
     return os.path.realpath(path)
 
 
+def _resolve_nofollow(path: str, cwd: str | None, home: str) -> str | None:
+    """`_resolve` と同じだが **最終成分の symlink は解決しない**（親ディレクトリのみ解決する）。
+
+    `ln -sf` / `rm` / `mv` が操作するのはリンクの実体ではなく **リンクそのもの** である。
+    `.claude/rules/*` は全件が `docs/rules/*.md` への symlink なので、realpath 版だけで保護を
+    判定すると `ln -sf /etc/passwd .claude/rules/lessons-core.md` や `rm -f .claude/rules/x.md`
+    が「docs/rules への書き込み」に化けて保護をすり抜ける（下流 Layer 1 が実測。既存名のときだけ
+    起きるため、存在しない名前を使う自己テストでは踏めなかった）。保護判定は realpath 版と
+    本関数の **どちらかが当たれば保護** する。
+    """
+    if not path or _UNRESOLVED_VAR.search(path):
+        return None
+    if path.startswith("~"):
+        path = home + path[1:]
+    if not path.startswith("/"):
+        if cwd is None:
+            return None
+        path = os.path.join(cwd, path)
+    parent, name = os.path.split(path.rstrip("/") or path)
+    if not name or name in (".", ".."):
+        return os.path.realpath(path)
+    return os.path.join(os.path.realpath(parent), name)
+
+
 def _under(path: str, base: str) -> bool:
     return path == base or path.startswith(base.rstrip("/") + "/")
 
@@ -413,7 +437,10 @@ def _repo_protected(path: str, cwd: str) -> str | None:
     i = 0
     while i < len(parts):
         part = parts[i]
-        if part == ".claude" and i + 1 < len(parts) and parts[i + 1] == _WORKTREES_DIRNAME:
+        if part == ".claude" and i + 2 < len(parts) and parts[i + 1] == _WORKTREES_DIRNAME:
+            # 除外は `<name>` 以下（別チェックアウト側の作業）に限る。`i + 2 < len` を確かめずに
+            # 読み飛ばすと、親ディレクトリを丸ごと消す `rm -rf .claude/worktrees`（稼働中の worktree が
+            # すべて消える）まで素通りした。`.claude/worktrees` 自身は `.claude` として保護する。
             i += 3  # `.claude/worktrees/<name>` を読み飛ばして続きを走査
             continue
         if part in _REPO_PROTECTED_DIRS:
@@ -453,9 +480,12 @@ def _repo_protected_hint(protected: str) -> str:
             "（.git/info/exclude で除外する必要自体をなくす）。"
         )
     return (
-        "  → .claude 配下（.claude/worktrees を除く）はネイティブ Edit / Write ツールで"
-        "書き換えること（PermissionRequest フックが自動承認する。settings.json / settings.local.json だけは"
-        "設計どおりユーザー確認に残る・#238）。.claude/rules への symlink 作成は "
+        "  → .claude 配下（.claude/worktrees/<name> 配下を除く）はネイティブ Edit / Write ツールで"
+        "書き換えること（PermissionRequest フックを配線しているプロジェクトでは自動承認される。"
+        "未配線のプロジェクトでは通常の権限判定に従う。settings.json / settings.local.json だけは"
+        "設計どおりユーザー確認に残る・#238）。実行ビット付与など Edit / Write で代替できない操作は "
+        "`git update-index --chmod=+x <path>`（git コマンドは判定対象外）を使う。"
+        ".claude/rules への symlink 作成は "
         "`bash tools/check_rules_sync.sh --fix` か `ln -s ../../docs/rules/<name>.md .claude/rules/<name>.md`"
         "（リンク元が docs/rules/ 配下のときだけ通る。Edit / Write は symlink を作れない）。"
     )
@@ -476,6 +506,10 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
     safe_bases = [cwd] + ([os.path.realpath(tmpdir)] if tmpdir else [])
     # `cd` でカレントディレクトリが変わったら以降のセグメントの基点も変える（None = 解決不能）
     current_cwd: str | None = cwd
+    # `cd -` は「直前のディレクトリ」へ戻る。追跡しないと以降の相対パス判定が丸ごと無効化され、
+    # #578 で塞いだ「作業領域の外への書き込み」まで素通りする（下流 Layer 1 で実測: 旧実装は
+    # `cd - && rm -rf ../../../tmp/x` を BLOCK、追跡なし実装は ALLOW）。1 変数で入れ替える。
+    prev_cwd: str | None = None
 
     def is_safe(path: str) -> bool:
         return (
@@ -508,7 +542,15 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
             if resolved is None:
                 continue
             in_tmp = _session_tmp_ok(resolved, session_id) or any(_under(resolved, b) for b in safe_bases[1:])
+            # 保護判定は「リンクを辿った先」と「リンクそのもの」の両方で見る。前者だけだと
+            # 既存 symlink（`.claude/rules/*` は全件が該当）を宛先にした書き込み・削除・張り替えが
+            # リンク先へ化けて素通りする（#618 の下流 Layer 1 指摘）。
+            link_target = _resolve_nofollow(token, current_cwd, home)
             protected = None if in_tmp else _repo_protected(resolved, cwd)
+            if protected is None and not in_tmp and link_target is not None:
+                protected = _repo_protected(link_target, cwd)
+                if protected is not None:
+                    resolved = link_target
             if protected is not None:
                 if _legit_rules_symlink(tokens, resolved, cwd, home):
                     continue
@@ -530,12 +572,15 @@ def analyze(command: str, cwd: str, home: str, session_id: str = "") -> list[str
         if index is not None and os.path.basename(tokens[index]) == "cd":
             raw = tokens[index + 1:]
             if raw and raw[0] == "-":
-                # `cd -`（直前のディレクトリへ戻る）は追跡していないので判定不能にする。`-` をフラグ扱いで
-                # 落として home へ移動したと誤断定すると、以降の相対パスが実在しない場所へ解決され
-                # 保護パスへの書き込みを見逃す（Layer 1 指摘）
-                current_cwd = None
+                # `cd -`（直前のディレクトリへ戻る）。`-` をフラグ扱いで落として home へ移動したと
+                # 誤断定すると保護パスへの書き込みを見逃すため、直前の cwd を保持して入れ替える。
+                # 直前が無いときはシェル側も OLDPWD 未設定で `cd -` が失敗する（cwd は変わらない）ので
+                # 据え置く。ここで None に倒すと以降の相対パス判定が丸ごと無効化される。
+                if prev_cwd is not None:
+                    current_cwd, prev_cwd = prev_cwd, current_cwd
             else:
                 operands = [t for t in raw if not t.startswith("-")]
+                prev_cwd = current_cwd
                 current_cwd = _resolve(operands[0], current_cwd, home) if operands else home
 
     # 同一理由の重複を除く（順序は維持）
@@ -607,7 +652,10 @@ def _self_test() -> int:
         (False, 'perl -Ilib -e "print 1" .claude/hooks/x.sh'),  # -I（大文字・include path）は対象外
         (True, 'gawk -i inplace "{gsub(/a/,\\"b\\")}1" .claude/hooks/x.sh'),  # gawk 明示呼び出し（Layer 1 指摘）
         (False, 'gawk "{print}" .claude/hooks/x.sh'),  # -i inplace 無しは対象外
-        (False, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),  # cd - は判定不能（素通り・見逃しを承知で誤断定より安全側）
+        (True, 'cd .claude/hooks && cd - && sed -i "s/a/b/" .claude/hooks/x.sh'),  # cd - は直前の cwd へ戻る（追跡する）
+        (True, 'cd - && rm -rf ../../../tmp/demo-out'),  # 直前が無い cd - でも #578 の外部書き込み保護は効く
+        (True, 'rm -rf .claude/worktrees'),  # 除外は <name> 配下だけ。親ごと消すのは保護する
+        (False, 'rm -rf .claude/worktrees/wt-1/build'),  # 別チェックアウト側の作業は従来どおり対象外
         (False, f'sed -i "s/a/b/" /tmp/claude-0/proj/{sid}/scratchpad/lab/.claude/hooks/dummy.sh'),  # scratchpad のラボは対象外
         (False, f'cd /tmp/claude-0/proj/{sid}/scratchpad/lab && echo x >> .git/info/exclude'),
         (False, 'ln -s ../../docs/rules/new-rule.md .claude/rules/new-rule.md'),

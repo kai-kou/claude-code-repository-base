@@ -40,10 +40,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/secret_scan.sh"
 # 同梱ツールは REPO_ROOT（git 操作対象＝消費先プロジェクト）ではなく CLAUDE_PLUGIN_ROOT
 # （プラグイン配布時にハーネスが設定）優先で探す。分離しないと第三者プロジェクトで
 # REPO_ROOT/tools/ が存在せず常に不発扱いになる（#539。無害不発自体は意図した設計）。
-# 値は絶対パス形式のときのみ採用する（空文字・相対パス等の想定外値は REPO_ROOT へフォールバック）。
+# 値は絶対パス形式 **かつ実際にツールを同梱している** ときだけ採用する（空文字・相対パス・
+# tools/ を持たないプラグインルートは REPO_ROOT へフォールバック。存在確認を省くと、消費先に
+# tools/ が実在してもコスト集計・テレメトリが警告なく恒久停止する・下流 Layer 1 指摘）。
 SCRIPTS_ROOT="$REPO_ROOT"
 case "${CLAUDE_PLUGIN_ROOT:-}" in
-  /*) SCRIPTS_ROOT="$CLAUDE_PLUGIN_ROOT" ;;
+  /*) [ -f "$CLAUDE_PLUGIN_ROOT/tools/calc_daily_cost.py" ] && SCRIPTS_ROOT="$CLAUDE_PLUGIN_ROOT" ;;
 esac
 _calc_script="${SCRIPTS_ROOT}/tools/calc_daily_cost.py"
 if [[ "$stop_hook_active" != "true" ]] && [[ -f "$_calc_script" ]] && command -v python3 &>/dev/null; then
