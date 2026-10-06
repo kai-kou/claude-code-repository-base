@@ -70,7 +70,7 @@ git diff main...HEAD --name-only
 - 未コミット・未追跡ファイルがないこと（`git status` が clean）
 - 未 push コミットがないこと（`git push -u origin <branch>` 済み）
 - `main`/`master` 直接 push になっていないこと
-- コミットメッセージが「何をしたか」を簡潔に表していること
+- コミットメッセージ / PR 本文から「何をしたか」と非自明な「なぜ」が分かること（`CLAUDE.md`「コミットメッセージ / コードコメント」）
 
 ### Step 3.5: PR 作成前フレッシュ文脈レビュー（シフトレフト・#627）
 

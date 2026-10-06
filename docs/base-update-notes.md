@@ -31,6 +31,17 @@
 
 ---
 
+## 2026-10-07（Issue #713）Why / Why not の置き場所を再定義 — コミット / PR 本文に Why、コードコメントに Why not
+
+**変更内容**:
+- 「コミットメッセージは何をしたか、なぜは Issue」という旧規約が、PR テンプレ（概要に「なぜ」）・squash マージ・Intent Gate の運用とずれていたため改めた。コミットメッセージ（squash 後の main の本文になる）と PR 本文には変更の Why（1〜2 行）、Issue にはユーザー意図の原文と経緯、コードコメントには Why not（実際に却下した代替案・直さない理由・非自明な制約）を書く
+- `docs/rules/user-instruction-issue-rules.md` の原則、`self-review-checklist.md` §0、`self-reviewer` スキルのコミット確認、`REVIEW.md` の NIT 定義を同じ方針に揃えた
+
+**下流で必要な手動手順**:
+- 下流の `CLAUDE.md` は保護対象なので自動同期されない。`CLAUDE.md` の「ブランチ / コミットメッセージ」節を、ベース版 `CLAUDE.md` の「### ブランチ」と「### コミットメッセージ / コードコメント（Why と Why not の置き場所）」の 2 節に置き換える
+- 下流で「なぜは Issue のみ」を意図的に採っている場合は置き換えない。ただし同期された `user-instruction-issue-rules.md`（Hot 層）の原則文と矛盾するので、`docs/rules/local/user-instruction-issue-rules-local.md` に「Why の置き場所は CLAUDE.md の旧節を優先する」と明記し、常駐させるため `ln -s ../../docs/rules/local/user-instruction-issue-rules-local.md .claude/rules/user-instruction-issue-rules-local.md` で symlink を張る（`docs/rules/local/` は自動では読み込まれない・`apply-base` SKILL.md §3.1）
+- `REVIEW.md` を下流独自に書き換えている場合は、NIT 定義への追記（言い換えコメント・古いコメント）を任意で取り込む
+
 ## 2026-09-25（Issue #708）無人ルーティンの `Workflow` 起動が承認待ちで停止する問題の修正 — `permissions.allow` に `Workflow` を追加
 
 **変更内容**:
