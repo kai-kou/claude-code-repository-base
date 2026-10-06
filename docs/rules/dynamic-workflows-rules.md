@@ -54,6 +54,11 @@ Claude が **JavaScript のオーケストレーションスクリプトを自�
     （非対話モードでは承認プロンプトを出せないため）。`tools/run_deep_research_workflow.py` が
     `SEARCH_ALLOWED_TOOLS` に `Workflow` を含めているのはこのため。
   - `ListSkills` / `SearchSkills`（claude.ai 側スキル）には `deep-research` は存在しない（0 件）。
+- **2026-09-25 追記（無人ルーティンの承認停止・#708・L-135）**: `Workflow` ツールは、allow ルールに一致しなければ
+  **対話セッションでも既定で `Review dynamic workflow before running` の承認を求める**。auto モードの同意はユーザー設定に、
+  "don't ask again" は `settings.local.json` に記録されるが、クラウドはコンテナが毎回新しいのでどちらも残らない。
+  したがって **`.claude/settings.json` の `permissions.allow` に `Workflow` を置くことが、無人ルーティンで起動する前提条件**。
+  外すと `tools/native_fallback.py --self-test` が FAIL する。
 
 - **2026-07-03 更新（公式ドキュメント `code.claude.com/docs/en/workflows` + `/en/commands` を Fetch して事実確認・ユーザー指示による再調査）**:
   - `/deep-research` は `/en/commands` の一覧表で **`[Workflow]`** に分類される（Skill ではない）。「Claude Code includes `/deep-research` as a built-in workflow」が公式の文言。

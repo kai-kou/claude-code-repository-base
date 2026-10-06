@@ -66,7 +66,7 @@ ROUTE_DEMOTION_SIGNATURES = [
      "next": "workflow 経路（Workflow({name: ...})）を試す"},
     {"pattern": "Review dynamic workflow before running",
      "meaning": "Workflow 実行が承認ゲートで止められた（非対話セッションでは承認できない）",
-     "next": "claude -p 経路へ降格し --allowedTools に Workflow を含める"},
+     "next": "permissions.allow に Workflow があるか確認（L-135）。当座は claude -p 経路へ降格し --allowedTools に Workflow を含める"},
     {"pattern": "No such command",
      "meaning": "スラッシュコマンド／ワークフロー名が現行 CLI に存在しない（改名・撤去）",
      "next": "公式 changelog を claude-code-spec-sync レーンで確認し、台帳の routes を更新する"},
@@ -482,6 +482,49 @@ def check_runner_equivalence() -> list[str]:
     return failures
 
 
+# ---------------------------------------------------------------- workflow 事前承認
+
+SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
+SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+_SKILL_WORKFLOW_RE = re.compile(r"\bWorkflow\(\{\s*name:\s*[\"']([A-Za-z0-9_:.-]+)[\"']")
+
+
+def check_workflow_permission(settings_path: Path = SETTINGS_PATH,
+                              skills_dir: Path = SKILLS_DIR,
+                              registry: dict | None = None) -> list[str]:
+    """Workflow を起動する経路があるのに permissions.allow で事前承認されていなければ失敗を返す（#708）。
+
+    Workflow ツールの checkPermissions は、名前付きの allow/ask/deny に一致しなければ既定で
+    ask（"Review dynamic workflow before running"）を返す。auto モードの同意はユーザー設定、
+    "don't ask again" は settings.local.json に記録されるため、コンテナが毎回新しいクラウドでは
+    どちらも残らず、無人ルーティンは承認待ちで停止する。事前承認はリポジトリの allow だけが持続する。
+    """
+    names: set[str] = set()
+    if registry is None:
+        registry = load_registry()
+    for cap in registry.get("capabilities", []):
+        for r in (cap.get("native") or {}).get("routes", []):
+            if r.get("kind") == "workflow" and r.get("status") != "unavailable":
+                names.add(r.get("name") or cap["id"])
+    if skills_dir.is_dir():
+        for md in skills_dir.rglob("*.md"):
+            names.update(_SKILL_WORKFLOW_RE.findall(md.read_text(encoding="utf-8", errors="ignore")))
+    if not names:
+        return []
+    try:
+        allow = json.loads(settings_path.read_text(encoding="utf-8"))["permissions"]["allow"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        return [f"workflow permission: {settings_path} の permissions.allow を読めない: {exc}"]
+    if "Workflow" in allow:
+        return []
+    missing = sorted(n for n in names if f"Workflow({n})" not in allow)
+    if not missing:
+        return []
+    return [f"workflow permission: {', '.join(missing)} を Workflow で起動する経路があるのに "
+            f"{settings_path.name} の permissions.allow に \"Workflow\" が無い（無人ルーティンが "
+            "'Review dynamic workflow before running' の承認待ちで停止する・#708）"]
+
+
 # ---------------------------------------------------------------- self-test
 
 def cmd_self_test() -> int:
@@ -523,6 +566,26 @@ def cmd_self_test() -> int:
         print(f"✓ routes ladder 検証 OK（{len(registry['capabilities'])} capability）")
     except Exception as exc:  # noqa: BLE001 - 煙テストは全例外を失敗として報告
         failures.append(f"routes: {exc}")
+
+    try:
+        wf_failures = check_workflow_permission()
+        # 検査器自体の陰性対照: allow が空なら必ず検出できること
+        with tempfile.TemporaryDirectory() as td:
+            empty = Path(td) / "settings.json"
+            empty.write_text('{"permissions": {"allow": []}}', encoding="utf-8")
+            probe_reg = {"capabilities": [{"id": "x", "native": {"routes": [
+                {"kind": "workflow", "name": "x", "status": "preferred"}]}}]}
+            if not check_workflow_permission(empty, Path(td) / "none", probe_reg):
+                wf_failures.append("workflow permission: 陰性対照（allow 空）を検出できない")
+            empty.write_text('{"permissions": {"allow": ["Workflow(x)"]}}', encoding="utf-8")
+            if check_workflow_permission(empty, Path(td) / "none", probe_reg):
+                wf_failures.append("workflow permission: Workflow(<name>) の個別許可を誤検出した")
+        if wf_failures:
+            failures.extend(wf_failures)
+        else:
+            print("✓ Workflow 事前承認チェック OK")
+    except Exception as exc:  # noqa: BLE001 - 煙テストは全例外を失敗として報告
+        failures.append(f"workflow permission: {exc}")
 
     try:
         eq_failures = check_runner_equivalence()

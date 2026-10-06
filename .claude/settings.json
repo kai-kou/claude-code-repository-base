@@ -8,6 +8,7 @@
   "permissions": {
     "allow": [
       "Skill",
+      "Workflow",
       "Bash(sleep:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",

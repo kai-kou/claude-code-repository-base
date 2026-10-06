@@ -515,6 +515,9 @@ COMPANION_SELF_TESTS: dict[str, tuple[str, ...]] = {
     "scripts/apply-to-repo.sh": ("tools/check_distribution_boundary.py",),
     "scripts/publish-snapshot.sh": ("tools/check_distribution_boundary.py",),
     "scripts/bootstrap.sh": ("tools/check_distribution_boundary.py",),
+    # permissions.allow の "Workflow" 事前承認を外す PR を検知する（#708）
+    ".claude/settings.json": ("tools/native_fallback.py",),
+    "tools/native_capabilities.json": ("tools/native_fallback.py",),
 }
 
 

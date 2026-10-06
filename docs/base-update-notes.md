@@ -31,6 +31,16 @@
 
 ---
 
+## 2026-09-25（Issue #708）無人ルーティンの `Workflow` 起動が承認待ちで停止する問題の修正 — `permissions.allow` に `Workflow` を追加
+
+**変更内容**:
+- `.claude/settings.json` の `permissions.allow` に `Workflow` を追加した。allow が無いと `Workflow` ツールは毎回 `Review dynamic workflow before running` の承認を求める。クラウドでは auto モードの同意も "don't ask again" もセッションをまたいで残らないため、無人ルーティンが停止していた（L-135）
+- `tools/native_fallback.py --self-test` に、Workflow で起動する経路（台帳の `kind: workflow`・スキル内の `Workflow({name: ...})`）があるのに allow が無い状態を検出するチェックを追加した
+
+**下流で必要な手動手順**:
+- 下流の `.claude/settings.json` が独自に管理されていて再適用で上書きされない場合は、`permissions.allow` に `"Workflow"` を手で追加する（Workflow を保存済み・バンドルの名前付きだけに限りたい場合は `"Workflow(deep-research)"` 等の個別形でもよい）
+- 確認: `python3 tools/native_fallback.py --self-test` が `✓ Workflow 事前承認チェック OK` を出すこと
+
 ## 2026-09-17（Issue #691）TypeSafe Jev（System One モデル）の opt-in 統合 — 通知トリアージの言い換え補完と下流向け活用ガイド
 
 **変更内容**:

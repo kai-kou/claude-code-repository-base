@@ -182,3 +182,39 @@ allow/deny の評価順とレイヤー適用範囲（Bash 限定 vs 全ツール
 **判定基準**: 「このコマンドが書き込む先はリポジトリ内でも `.claude/` か `.git/` の中か？」→ Yes なら Bash では書かない（ネイティブ Edit / Write・git コマンド）。「一時ファイルをリポジトリ直下に作ろうとしていないか？」→ scratchpad に置く。
 
 **保持理由**: Protected paths は「作業ツリーの中なら安全」という直感に反する恒久仕様で、auto モードの「Bash で編集せよ」指示と組み合わさると全ての下流ルーティンで再発する。L-129（cwd の外）と対で常駐させる。
+
+---
+
+## L-135: 無人ルーティンが `Workflow` ツールの「Review dynamic workflow before running」承認待ちで停止する（2026-09-25・#708）
+
+**症状**: scheduled trigger（無人ルーティン）で `Workflow({name: "deep-research", ...})` 等を呼ぶと、承認プロンプトが出たまま止まる。応答者がいないため、その回の処理が終わらない。
+
+**根本原因（CLI v2.1.282 のバイナリ + 公式ドキュメント + headless プローブで確定・3 層）**
+
+1. **直接原因**: `Workflow` ツールの `checkPermissions` は、名前付きの `deny` / `ask` / `allow`（`Workflow(<name>)`）ルールに一致しなければ **既定で `ask`（`Review dynamic workflow before running`）を返す**。スクリプト渡しの場合は名前一致の判定すら行わない。ツール全体の allow ルール `Workflow` が無ければ、判定は必ず承認か classifier に回る。本ベースの `permissions.allow` には `Skill` はあったが `Workflow` が無かった。
+2. **中間原因（クラウドでは同意が残らない）**: 公式（[workflows](https://code.claude.com/docs/en/workflows)「Approve the plan before it runs」）で承認を省略できるのは次の 2 つ。① auto モードで一度 **Yes** した同意（"records consent in your **user settings**"）② **Yes, and don't ask again**（ルール提案の書き込み先は `localSettings` = `settings.local.json`）。クラウドはコンテナが毎回新しく、`~/.claude/settings.json` は存在すらしない（実測）。`settings.local.json` もセッションをまたいで消える。そのため **全ルーティンが毎回「初回起動」扱い** になる。auto の classifier は承認することもあるが、判定は文脈依存でぶれる。
+3. **根本原因**: 無人セッション（`CLAUDE_CODE_HOLD_UNANSWERED_PARKED_PERMISSION=1`）では `ask` が保留（park）され、誰も応答しない。L-129（作業ツリー外の Bash）と L-130（保護パス・MCP）で無人停止の経路を塞いできたが、**セッションツール（Workflow）の事前承認は棚卸しの対象外** だった。
+
+**実測（`claude -p --settings` の headless プローブ・v2.1.282・sonnet・スクリプト渡しの最小 workflow）**
+
+| permission mode | allow なし | allow に `Workflow` |
+|---|---|---|
+| default（Manual） | **deny**（`Review dynamic workflow before running`・`-p` では ask が deny で終わる） | 通過 |
+| auto | 通過（classifier が承認） | 通過 |
+
+auto で通ったことは対策が要らない根拠にならない（L-130 と同じ扱い。classifier に回った時点で無人停止のリスクがある）。
+
+**対策（採用）**
+
+- `.claude/settings.json` の `permissions.allow` に **`Workflow`（ツール全体）** を追加した。公式が「`Workflow` in your allow rules approves every workflow」と明記している。リポジトリにコミットされた allow は、コンテナが替わっても消えない唯一の事前承認になる。
+- 回帰防止: `python3 tools/native_fallback.py --self-test` の `check_workflow_permission()` が、次のどちらかがあるのに allow が無ければ FAIL を返す。① 台帳（`native_capabilities.json`）で `kind: workflow` の経路が有効 ② `.claude/skills/**/*.md` に `Workflow({name: ...})` の記述がある。`self_review_check.py` の `COMPANION_SELF_TESTS` で `.claude/settings.json` と台帳の変更にも連動させ、allow を外す PR を PR 作成前ゲートで止める。
+
+**`Workflow(<name>)` の個別許可にしなかった理由（トレードオフ）**: 個別許可は保存済み・バンドルの workflow にしか一致しない（スクリプト渡しでは名前判定がされない）。そのため Claude が書いたスクリプトや、下流で追加した保存済み workflow は、ルーティンで再び止まる。ツール全体の許可で失う安全性は「実行前の計画レビュー」だけ。workflow 内のエージェントのツール呼び出しは、従来どおり同じ権限評価（deny・フック・L-129/L-130 のガード）を受ける。コストの暴走は、ランタイムの上限（1,000 エージェント/run）・サイズ指針（`workflowSizeGuideline`）・Workflow ツール自身の「明示オプトイン時のみ呼ぶ」制約で抑える。個別許可に絞りたい下流プロジェクトは、`Workflow` を `Workflow(deep-research)` 等に置き換えればよい（self-test はどちらの形も合格にする）。
+
+**採らなかった案**: ルーティンの `permission_mode` を `bypassPermissions` にする（承認レイヤー全体を外す・L-129 の不採用を維持）/ `PreToolUse` フックで `Workflow` を allow にする（allow ルールと効果は同じだが、配線が増えるだけ・YAGNI）/ 「Yes, and don't ask again」に頼る（`settings.local.json` はクラウドで消えるうえ、CLAUDE.md が書き込みを禁じている）。
+
+**残余リスク**: workflow 内のエージェントが承認の要るツールを呼ぶと、run はその承認待ちで一時停止する（公式: "A run pauses on its own only for agent permission prompts"）。これは Workflow 起動の承認とは別の層で、L-129 / L-130 のガードと allow の整備で防ぐ。`requiresUserInteraction` 付きの MCP ツールはエージェントからも呼ばない（L-130）。
+
+**判定基準**: 「無人ルーティンが呼ぶツールは、コミット済みの `permissions.allow` だけで事前承認されているか？（ユーザー設定・`settings.local.json`・対話で押した "Always" に頼っていないか）」→ No なら、クラウドでは毎回承認待ちで止まると考える。
+
+**保持理由**: 「一度 Yes したから次からは通る」という対話の経験則が、クラウドの使い捨てコンテナでは成り立たない。新しいセッションツールやバンドル機能が増えるたびに再発しうる。

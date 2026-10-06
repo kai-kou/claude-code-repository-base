@@ -73,7 +73,7 @@ probe の exit code（`probe <id>` 単体判定時。`--all` は一覧表示専�
 | 段 | 経路 | 実行形 | 主な失敗の意味 |
 |----|------|--------|--------------|
 | 1a | `skill` | `Skill(skill="<name>", args=...)` | `disable-model-invocation` → モデル起動が禁止された。1b へ |
-| 1b | `workflow` | `Workflow({name: "<name>", args: ...})` | 承認ゲート（`Review dynamic workflow before running`）で止まる → 2 へ |
+| 1b | `workflow` | `Workflow({name: "<name>", args: ...})` | 承認ゲート（`Review dynamic workflow before running`）で止まる → まず `permissions.allow` に `Workflow` があるか確認（無ければ無人ルーティンは毎回ここで停止する・L-135）→ それでも止まれば 2 へ |
 | 1c | `session-tool` | `ToolSearch "select:<Tool>"` → 直接呼び出し（`SendMessage` 等で同等構成を手組み） | ツール未露出 → 2 へ |
 | 2 | `claude-p` | `tools/native_fallback.py headless ...`（既存の専用ランナーでも可） | CLI 不在・timeout → 3 へ |
 | 3 | `final` | スキル固有の最終手段（fan-out・DIY・次スロット再試行） | — |
@@ -95,7 +95,7 @@ python3 tools/native_fallback.py routes --json                      # 全 capabi
 判定ロジックの正本は `ROUTE_DEMOTION_SIGNATURES`（`tools/native_fallback.py`）。要点:
 
 - `disable-model-invocation` / `cannot be used with Skill tool` → **skill 経路が閉じた**。workflow 経路へ
-- `Review dynamic workflow before running` → **非対話セッションで承認できない**。`--allowedTools` に `Workflow` を含めた claude -p へ
+- `Review dynamic workflow before running` → **allow ルールが無く承認待ちになった**。まず `.claude/settings.json` の `permissions.allow` に `Workflow` があるか確認する（無人ルーティンの恒久策・L-135）。その場では `--allowedTools` に `Workflow` を含めた claude -p へ
 - `No such command` / `not found` → **改名・撤去の可能性**。次段を試しつつ `claude-code-spec-sync` レーンで公式 changelog を確認する
 
 ### 経路が動いていたと判明したときの後始末（必須）
