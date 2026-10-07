@@ -53,8 +53,10 @@ from pathlib import Path
 PRICING: dict[str, dict[str, float]] = {
     # エイリアス指定（opus/sonnet/haiku）でも単価を引けるようにする（agent-team.md「モデル指定の方針」）
     "opus":                          {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},  # 解決先 = Opus 5.5（2026-09-22〜）
-    "sonnet":                        {"input": 2.0,  "cache_write": 2.5,  "cache_read": 0.2,  "output": 10.0},  # 解決先 = Sonnet 5
-    "haiku":                         {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},
+    "sonnet":                        {"input": 2.0,  "cache_write": 2.5,  "cache_read": 0.1,  "output": 10.0},  # 解決先 = Sonnet 5.5（2026-09-28〜）
+    "haiku":                         {"input": 0.1,  "cache_write": 0.125, "cache_read": 0.01, "output": 0.5},   # 解決先 = Haiku 5.5（2026-10-07〜）・プロンプト ≤100K の単価
+    "claude-sonnet-5-5":             {"input": 2.0,  "cache_write": 2.5,  "cache_read": 0.1,  "output": 10.0},
+    "claude-haiku-5-5":              {"input": 0.1,  "cache_write": 0.125, "cache_read": 0.01, "output": 0.5},
     "claude-opus-5-5":               {"input": 4.0,  "cache_write": 5.0,  "cache_read": 0.2,  "output": 20.0},
     "claude-opus-5":                 {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
     "claude-opus-4-8":               {"input": 5.0,  "cache_write": 6.25, "cache_read": 0.5,  "output": 25.0},
@@ -67,7 +69,17 @@ PRICING: dict[str, dict[str, float]] = {
     "claude-haiku-4-5-20251001":     {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},
     "claude-haiku-4-5":              {"input": 1.0,  "cache_write": 1.25, "cache_read": 0.1,  "output": 5.0},
 }
-DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+# Haiku 5.5 は 1 リクエストの総プロンプト長（input + cache write + cache read）が閾値を超えると
+# そのリクエスト全体が高単価になる。段階はリクエスト単位で決まりセッション合算では判定できないため、
+# parse_transcript が assistant メッセージごとに判定して long_context_* へ別積みする。
+LONG_CONTEXT_THRESHOLD = 100_000
+PRICING_LONG_CONTEXT: dict[str, dict[str, float]] = {
+    "claude-haiku-5-5": {"input": 0.5, "cache_write": 0.625, "cache_read": 0.05, "output": 2.5},
+    "haiku":            {"input": 0.5, "cache_write": 0.625, "cache_read": 0.05, "output": 2.5},
+}
+_LONG_KEYS = ("input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens")
 
 # 1 USD → 概算 JPY（レポート用、精度重要でない）
 USD_TO_JPY = 150
@@ -127,6 +139,9 @@ def parse_transcript(transcript_path: str) -> dict:
         "cache_read_tokens": 0,
         "model": DEFAULT_MODEL,
     }
+    # 閾値超リクエストの分（上記合計の内数）。無いキーは 0 扱いで既存ログと互換
+    for k in _LONG_KEYS:
+        total[f"long_context_{k}"] = 0
 
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as f:
@@ -147,6 +162,13 @@ def parse_transcript(transcript_path: str) -> dict:
                     total["output_tokens"] += usage.get("output_tokens", 0)  # type: ignore[operator]
                     total["cache_write_tokens"] += usage.get("cache_creation_input_tokens", 0)  # type: ignore[operator]
                     total["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)  # type: ignore[operator]
+                    prompt_len = (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+                                  + usage.get("cache_read_input_tokens", 0))
+                    if prompt_len > LONG_CONTEXT_THRESHOLD:
+                        total["long_context_input_tokens"] += usage.get("input_tokens", 0)  # type: ignore[operator]
+                        total["long_context_output_tokens"] += usage.get("output_tokens", 0)  # type: ignore[operator]
+                        total["long_context_cache_write_tokens"] += usage.get("cache_creation_input_tokens", 0)  # type: ignore[operator]
+                        total["long_context_cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)  # type: ignore[operator]
                     # 最後のモデル名を使用する
                     if "model" in inner:
                         total["model"] = inner["model"]
@@ -168,24 +190,43 @@ def parse_transcript(transcript_path: str) -> dict:
 def calc_cost(usage: dict) -> float:
     """トークン使用量と単価からコスト (USD) を計算する。"""
     model_name = str(usage.get("model", DEFAULT_MODEL))
-    # モデル名に部分マッチするエントリを探す
-    pricing = PRICING.get(model_name)
-    if pricing is None:
-        for key, val in PRICING.items():
+    key = model_name if model_name in PRICING else None
+    if key is None:
+        # 日付サフィックス・provider 接頭辞付き ID（claude-haiku-4-5-20260101 / anthropic.claude-haiku-4-5-v1:0 等）は
+        # 最長一致する版付きキーへ寄せる。先にファミリー照合すると旧世代 ID が現行世代のエイリアス単価
+        # （haiku = Haiku 5.5）で計算され、Bedrock 等で Haiku 4.5 が約 10 倍過小に計上される
+        versioned = [k for k in PRICING if k.startswith("claude-") and k in model_name]
+        if versioned:
+            key = max(versioned, key=len)
+    if key is None:
+        for k in PRICING:
             # モデルファミリー（opus/sonnet/haiku）で照合（バージョン番号の違いに対応）
-            if any(family in key and family in model_name.lower() for family in ["opus", "sonnet", "haiku"]):
-                pricing = val
+            if any(family in k and family in model_name.lower() for family in ["opus", "sonnet", "haiku"]):
+                key = k
                 break
-    if pricing is None:
-        pricing = PRICING[DEFAULT_MODEL]
+    if key is None:
+        key = DEFAULT_MODEL
+    pricing = PRICING[key]
 
-    cost = (
-        int(usage.get("input_tokens", 0)) * pricing["input"]
-        + int(usage.get("output_tokens", 0)) * pricing["output"]
-        + int(usage.get("cache_write_tokens", 0)) * pricing.get("cache_write", 0)
-        + int(usage.get("cache_read_tokens", 0)) * pricing.get("cache_read", 0)
-    ) / 1_000_000
+    def _tokens(prefix: str = "") -> dict[str, int]:
+        return {k: int(usage.get(prefix + k, 0) or 0) for k in _LONG_KEYS}
 
+    def _price(tok: dict[str, int], p: dict[str, float]) -> float:
+        return (
+            tok["input_tokens"] * p["input"]
+            + tok["output_tokens"] * p["output"]
+            + tok["cache_write_tokens"] * p.get("cache_write", 0)
+            + tok["cache_read_tokens"] * p.get("cache_read", 0)
+        )
+
+    total_tok = _tokens()
+    long_pricing = PRICING_LONG_CONTEXT.get(key)
+    if long_pricing is None:
+        return round(_price(total_tok, pricing) / 1_000_000, 6)
+
+    long_tok = _tokens("long_context_")
+    base_tok = {k: max(total_tok[k] - long_tok[k], 0) for k in _LONG_KEYS}
+    cost = (_price(base_tok, pricing) + _price(long_tok, long_pricing)) / 1_000_000
     return round(cost, 6)
 
 
@@ -603,6 +644,48 @@ def build_summary(day: dict) -> str:
     return f"💴 {today} コスト累計: {' | '.join(parts)}"
 
 
+def _self_test() -> int:
+    """単価のキー解決と Haiku 5.5 の段階料金を検証する（期待値は公式単価からの手計算）。"""
+    import tempfile
+
+    def usage_of(model: str, requests: list[tuple]) -> dict:
+        # requests の要素は (input, output) または (input, output, cache_write, cache_read)
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
+            for inp, out, *cache in requests:
+                cw, cr = (cache + [0, 0])[:2]
+                f.write(json.dumps({"type": "assistant", "message": {"model": model, "usage": {
+                    "input_tokens": inp, "output_tokens": out,
+                    "cache_creation_input_tokens": cw, "cache_read_input_tokens": cr}}}) + "\n")
+        try:
+            return parse_transcript(f.name)
+        finally:
+            os.unlink(f.name)
+
+    cases = [
+        ("haiku 5.5 ≤100K", "claude-haiku-5-5", [(30_000, 3_000)], 0.0045),
+        ("haiku 5.5 >100K", "claude-haiku-5-5", [(150_000, 2_000)], 0.08),
+        ("haiku 5.5 閾値ちょうど（低単価側）", "claude-haiku-5-5", [(100_000, 0)], 0.01),
+        ("haiku 5.5 混在", "claude-haiku-5-5", [(150_000, 1_000), (5_000, 1_000)], 0.0785),
+        ("haiku 5.5 日付付き ID", "claude-haiku-5-5-20261007", [(150_000, 2_000)], 0.08),
+        ("haiku 4.5 日付付き ID は 4.5 単価", "claude-haiku-4-5-20260101", [(30_000, 3_000)], 0.045),
+        ("haiku 4.5 Bedrock ID は 4.5 単価", "anthropic.claude-haiku-4-5-v1:0", [(30_000, 3_000)], 0.045),
+        # キャッシュ込みで 100K を超えるリクエスト: 2K×0.5 + 1K×2.5 + 10K×0.625 + 120K×0.05 = 15,750（÷1M）
+        ("haiku 5.5 キャッシュ込みで >100K", "claude-haiku-5-5", [(2_000, 1_000, 10_000, 120_000)], 0.01575),
+        # キャッシュ込みで 100K 以下: 2K×0.1 + 1K×0.5 + 10K×0.125 + 80K×0.01 = 2,750（÷1M）
+        ("haiku 5.5 キャッシュ込みで ≤100K", "claude-haiku-5-5", [(2_000, 1_000, 10_000, 80_000)], 0.00275),
+        ("sonnet 5.5", "claude-sonnet-5-5", [(30_000, 3_000)], 0.09),
+        ("sonnet 5.5 は段階料金なし", "claude-sonnet-5-5", [(150_000, 2_000)], 0.32),
+    ]
+    failed = 0
+    for name, model, reqs, expected in cases:
+        got = calc_cost(usage_of(model, reqs))
+        ok = abs(got - expected) < 1e-9
+        failed += not ok
+        print(f"{'PASS' if ok else 'FAIL'} {name}: got={got} expected={expected}")
+    print(f"[calc_daily_cost self-test] {len(cases) - failed}/{len(cases)} PASS")
+    return 1 if failed else 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Claude Code セッション日次コスト計算ツール"
@@ -627,11 +710,19 @@ def main() -> None:
         help="cost_log.jsonl を集計して daily_cost_stats.json に書き出す（19:00 スロット用）",
     )
     parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="単価表と段階料金の計算を自己検証する",
+    )
+    parser.add_argument(
         "--rotate",
         action="store_true",
         help="cost_log.jsonl の 30 日超行を削除する（--flush と組み合わせて使用）",
     )
     args = parser.parse_args()
+
+    if args.self_test:
+        sys.exit(_self_test())
 
     # --flush: 19:00 スロット用バッチ処理
     if args.flush:

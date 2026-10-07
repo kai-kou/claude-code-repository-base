@@ -1,6 +1,6 @@
 ---
 name: research-runner
-description: Deep Research を完全自動実行するスキル。ネイティブ `/deep-research`（クラウド環境でも直接実行可能・Opus orchestrator）を主エンジン、`claude -p` サブプロセス経由の `/deep-research` を第2、DIY（Sonnet 5 + WebSearch/WebFetch のウェブリサーチ）を最終フォールバックとして、`content/research/{ID}_prompt.md` から `content/research/{ID}_deep_research.{md,json}` を自動生成し、品質ゲート・PR 作成・AIレビュー・自動マージまでを担う。外部 LLM API（Gemini 等）によるディープリサーチは行わない。「リサーチ自動化して」「ディープリサーチして」「research-runner」と依頼された時に使用する。「ディープリサーチして」の既定エンジンは本スキルであり、ビルトインの deep-research や素の WebSearch へ直行しない。
+description: Deep Research を完全自動実行するスキル。ネイティブ `/deep-research`（クラウド環境でも直接実行可能・Opus orchestrator）を主エンジン、`claude -p` サブプロセス経由の `/deep-research` を第2、DIY（Sonnet + WebSearch/WebFetch のウェブリサーチ）を最終フォールバックとして、`content/research/{ID}_prompt.md` から `content/research/{ID}_deep_research.{md,json}` を自動生成し、品質ゲート・PR 作成・AIレビュー・自動マージまでを担う。外部 LLM API（Gemini 等）によるディープリサーチは行わない。「リサーチ自動化して」「ディープリサーチして」「research-runner」と依頼された時に使用する。「ディープリサーチして」の既定エンジンは本スキルであり、ビルトインの deep-research や素の WebSearch へ直行しない。
 model: sonnet
 effort: high
 disallowed-tools: AskUserQuestion
@@ -51,7 +51,7 @@ Deep Research の完全自動化スキル。ユーザーの手動ディープリ
 |---|---|
 | **主エンジン** | **ネイティブ `/deep-research`（公式分類=Workflow・adversarial 多票検証）**。対話起動（Step 3a）は本セッションから **`Workflow` ツール**（`Workflow({name: 'deep-research', args: ...})`）で直接呼び出す（`claude -p` 不要・実機検証 2026-07-29 / CLI v2.1.220・`docs/rules/dynamic-workflows-rules.md` 参照）。**`Skill` ツール経由は v2.1.218 以降 `disable-model-invocation` で不可**。正確性が最高で **必ず最初に実行する** |
 | 第2エンジン | **`claude -p` サブプロセス経由の `/deep-research`** — `tools/run_deep_research_workflow.py`（`claude -p` サブプロセス + Opus 明示指定）。自律・バッチ起動（Step 3b）ではこちらが最初の経路。対話起動では Step 3a（直接呼び出し）が失敗したときのフォールバック |
-| フォールバック | **DIY（ウェブリサーチ）**（Sonnet 5 + WebSearch + WebFetch）（上記2つが失敗時の最終手段） |
+| フォールバック | **DIY（ウェブリサーチ）**（Sonnet + WebSearch + WebFetch）（上記2つが失敗時の最終手段） |
 | 禁止 | **外部 LLM API（Gemini 等）によるディープリサーチは行わない**（飼い主決定・2026-07-16・Issue #260）。旧 Gemini Deep Research Max 経路は廃止済み |
 | コスト | **既定=サブスク週次枠経路（追加 $ ゼロ）**: セッション認証（Claude Code Max サブスク）をそのまま使用し（`DEEP_RESEARCH_USE_SUBSCRIPTION=1` 既定）、`/deep-research` は週次クォータの枠内で実行され追加課金なし。`DEEP_RESEARCH_USE_SUBSCRIPTION=0` で従来の API 従量経路（1本上限 `--max-budget-usd`・当月累計 `$40` 超で DIY フォールバック・月 `$50` ブレーカー）に戻せる（Step 3a の直接呼び出しはセッションの既存認証をそのまま使うため、この課金分岐自体が発生しない） |
 | モデル | 公式仕様は「ワークフロー内の各エージェントはセッションのモデルを使用（スクリプトが明示的に別モデルへ routing しない限り）」。**Opus 固定は本プロジェクトの選択**（Step 3b が `--model opus` を明示指定・エイリアス）であり、Anthropic 側が `/deep-research` を Opus に固定している仕様ではない。Step 3a（直接呼び出し）はそのときのセッションモデルに従う点に注意 |
@@ -224,12 +224,12 @@ python3 tools/run_deep_research_workflow.py {ID}
 
 > 🔴 Step 3 が **EXIT=0（成功）したら、Step 6 のコミット前に必ず `research-skip:*` ラベルを全削除** する。
 
-### Step 4: 最終フォールバック（DIY・ウェブリサーチ＝Sonnet 5 + WebSearch）【Step 3（3a/3b）が失敗時のみ】
+### Step 4: 最終フォールバック（DIY・ウェブリサーチ＝Sonnet + WebSearch）【Step 3（3a/3b）が失敗時のみ】
 
 Step 3 のネイティブ `/deep-research`（対話起動なら 3a 直接呼び出し → 3b `claude -p` の両方、
 自律起動なら 3b）が **実際に失敗した場合のみ** 実行する（安易な DIY 直行禁止）。
 本セッション自身が WebSearch/WebFetch で調査項目ごとに並列 sub-agent
-（Haiku 4.5 推奨）を起動し、`research_schema.json` 準拠 JSON を組み立てて `tools/run_deep_research.py` に引き渡す。
+（`haiku` 推奨）を起動し、`research_schema.json` 準拠 JSON を組み立てて `tools/run_deep_research.py` に引き渡す。
 **外部 LLM API（Gemini 等）へのフォールバックは行わない**（Issue #260）。
 
 sub-agent 起動フォーマット・統合手順は `reference.md`「Step 4: 最終フォールバック（DIY）」を参照。

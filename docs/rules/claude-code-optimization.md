@@ -29,6 +29,7 @@
 
 モデルの性能・料金・用途の使い分けは `docs/rules/agent-team.md` の「モデル一覧」を参照。本ファイルでは Claude Code 固有の最適化（コンテキスト活用・`/effort` コマンド）に絞って記載する。
 
+> **2026-10-07 更新**: Haiku 5.5 がリリースされ `haiku` エイリアスの解決先になった（Adaptive Thinking・effort 対応・1M コンテキスト。詳細は `agent-team.md`「モデル一覧」）。以下は 2026-03 時点の記録。
 > **最新情報（2026-03）**: Haiku 4.5 が Extended Thinking に初対応。また Opus 4.6 の料金は旧世代（Opus 4.1）比で 67% 削減されており、コストパフォーマンスが大幅に向上している。
 
 ### Adaptive Thinking（適応的思考）
@@ -58,13 +59,13 @@ Claude Code セッション内で思考の深度を設定できる。API レベ�
 | コマンド | API 値 | 思考深度 | 適用場面 |
 |---------|--------|---------|---------|
 | `/effort low` | `"low"` | 最小・大幅なトークン節約 | 定型チェック・軽量調査・ルーティング判断 |
-| `/effort medium` | `"medium"` | バランス・適度なトークン節約 | 通常の実装・PR 対応（Sonnet 5 に特に推奨） |
+| `/effort medium` | `"medium"` | バランス・適度なトークン節約 | 通常の実装・PR 対応（`sonnet` に特に推奨） |
 | `/effort high` | `"high"` | 複雑なタスクに対応 | 複雑な実装・設計判断・ファクトチェック |
-| `/effort xhigh` | `"xhigh"` | コーディング/エージェント向け最適 | **`opus` 推奨**・台本生成・複数ファイルリファクタリング・アーキテクチャ設計（現行 Opus 5.5 は既定 `medium`・Sonnet 5 は既定 `high` のため明示指定が必要） |
+| `/effort xhigh` | `"xhigh"` | コーディング/エージェント向け最適 | **`opus` 推奨**・台本生成・複数ファイルリファクタリング・アーキテクチャ設計（現行 Opus 5.5 / Sonnet 5.5 / Haiku 5.5 は Claude Code の既定が `medium` のため明示指定が必要） |
 | `/effort max` | `"max"` | 絶対最大・トークン無制限 | 最深の推論が必要な設計・アーキテクチャ決定。実用上は xhigh で十分なことが多い |
 
 > **2026-07-24 更新（Opus 5）**: effort は 5 段階（`low` / `medium` / `high` / `xhigh` / `max`）。**Opus 5 のデフォルトは `high`**（旧 Opus 4.7 のみ `xhigh`。**2026-09-22 以降の現行 Opus 5.5 は `medium`**）。公式推奨は「コーディング/エージェントは `xhigh`、それ以外の知能重視は `high` を基準に eval で per-route 調整」。現行 Opus では **`low`/`medium` でも品質が高い** ため、コスト削減はまず effort を下げて評価する。`max` は Opus 系と Sonnet・Fable で利用可。
-> **注意**: `/effort high` は Opus 5 / Sonnet 5 のデフォルト（現行 Opus 5.5 のデフォルトは `medium`）。意識的にコストを下げたい場合は `medium` または `low` を指定する。
+> **注意**: `/effort high` は Opus 5 / Sonnet 5 のデフォルト（現行 Opus 5.5 / Sonnet 5.5 / Haiku 5.5 の Claude Code 既定は `medium`）。意識的にコストを下げたい場合は `medium` または `low` を指定する。
 > **Opus 推奨**: 台本生成品質の観点から **`/model opus` + `/effort xhigh` を明示指定**。現行 Opus 5.5 は既定が `medium` のため、xhigh を使うには明示指定が必須。
 > **`ultracode`（Opus 系セッション限定）**: `xhigh` + Dynamic Workflows（`/workflows`）。大規模・多エージェント作業の動的オーケストレーション。`settings.json` には書けない（セッション内のみ）。1ターンだけ深い推論が欲しい場合は `ultrathink` キーワードをプロンプトに含める（effort 設定は変わらない）。
 
@@ -76,7 +77,7 @@ Claude Code セッション内で思考の深度を設定できる。API レベ�
 
 **推奨**:
 - 台本生成（**`opus`** 使用時）: `/effort xhigh` を **明示指定**（現行 Opus 5.5 の既定は `medium`）。コーディング/エージェント/知能重視に最適
-- Sonnet 5 で通常作業: `/effort medium` でコスト削減
+- `sonnet`（現行 Sonnet 5.5）で通常作業: 既定の `/effort medium` のまま
 - 定型・ルーティング判断: `/effort low` で高速化
 
 **ブラウザ版（claude.ai/code）での effort 設定**:
@@ -166,7 +167,7 @@ Anthropic が 2026-03 に発表した **Advisor Strategy**。実行モデル（E
 ```python
 # Anthropic API key 使用時の advisor_tool 組み込み例
 response = client.beta.messages.create(
-    model="claude-sonnet-5",   # Executor: Sonnet（低コスト実行）
+    model="claude-sonnet-5-5",   # Executor: Sonnet（低コスト実行）
     betas=["advisor-tool-2026-03-01"],
     tools=[{
         "type": "advisor_20260301",
@@ -198,7 +199,7 @@ response = client.beta.messages.create(
 | 状況 | 推奨戦略 |
 |------|---------|
 | 台本生成（Phase 3）| Opus の 1M コンテキストを活用し、リサーチ全文 + キャラ設定 + 既存台本を同時参照 |
-| 画像パイプライン | Sonnet 5 でデザイン定義書 + 全 visual_cue を一括処理（圧縮リスク低減） |
+| 画像パイプライン | Sonnet でデザイン定義書 + 全 visual_cue を一括処理（圧縮リスク低減） |
 | レビュー・検証 | Haiku でコンテキスト効率最大化（不要な情報を渡さない） |
 | 長時間パイプライン | 圧縮は Claude 標準の Auto Compaction（コンテキスト上限付近で自動発動）に委ねる。PostCompact フックが自動コミットで作業を保護する |
 
@@ -964,8 +965,8 @@ Claude Code で不具合に遭遇
 |------|------|
 | **用途** | Anthropic API のテスト・デバッグ・スクリプティング・自動化 |
 | **インストール** | `npm install -g @anthropic-ai/cli` |
-| **基本コマンド** | `ant messages create --model claude-sonnet-5 --max-tokens 1024 -p "Hello"` |
-| **ストリーミング** | `ant messages stream --model claude-sonnet-5 -p "長い応答"` |
+| **基本コマンド** | `ant messages create --model claude-sonnet-5-5 --max-tokens 1024 -p "Hello"` |
+| **ストリーミング** | `ant messages stream --model claude-sonnet-5-5 -p "長い応答"` |
 | **ファイル添付** | `ant messages create --file image.png -p "この画像を説明して"` |
 | **環境変数** | `ANTHROPIC_API_KEY` を設定して使用 |
 
@@ -1111,7 +1112,7 @@ Claude Code で不具合に遭遇
 | フラグ | 動作 | 備考 |
 |--------|------|------|
 | `-p` / `--print` | ✅ | ヘッドレス非対話実行（基本） |
-| `--model <id>` | ✅ | `claude-haiku-4-5` 等を指定 |
+| `--model <id>` | ✅ | `haiku` 等のエイリアスを推奨（検証時は `claude-haiku-4-5` で実施） |
 | `--output-format text/json/stream-json` | ✅ | `json` は `total_cost_usd`・所要時間・result を構造化取得。`stream-json` は `--verbose` 必須 |
 | `--json-schema '<schema>'` | ✅ | JSON スキーマ準拠の型安全出力（v2.1.163） |
 | `--allowedTools '<pattern>'` | ✅ | `Bash(git log *)` 等のパターン制限が有効。副作用の封じ込めに有用 |
@@ -1139,23 +1140,23 @@ Claude Code で不具合に遭遇
 ```bash
 # パターン1: 構造化出力での状態チェック（JSON で parse・コスト追跡）
 timeout 120 claude -p "Check pending PR reviews and output JSON summary" \
-  --model claude-haiku-4-5 \
+  --model haiku \
   --allowedTools "Bash(gh *)" \
   --no-session-persistence \
   --output-format json
 
 # パターン2: 軽量スキル実行（/status 等）
-timeout 120 claude -p "/status" --model claude-haiku-4-5 --output-format text
+timeout 120 claude -p "/status" --model haiku --output-format text
 
 # パターン3: 副作用なしの安全な読み取り（特定ツールのみ許可）
 timeout 60 claude -p "Summarize last 5 commits" \
-  --model claude-haiku-4-5 \
+  --model haiku \
   --allowedTools "Bash(git log *)" --no-session-persistence --output-format json
 
 # パターン4: JSON スキーマで型安全な出力（v2.1.163）
 # ※ gh issue list はローカル実行用の例。クラウドでは 403 のため MCP（list_issues）を許可する（L-114）
 timeout 120 claude -p "List open issues as JSON" \
-  --model claude-haiku-4-5 \
+  --model haiku \
   --allowedTools "Bash(gh issue list *)" \
   --json-schema '{"type":"object","properties":{"issues":{"type":"array"}}}'
 ```
@@ -1235,7 +1236,7 @@ timeout 120 claude -p "List open issues as JSON" \
 | # | 提案 | 統合判定 | ステータス / 根拠 |
 |---|------|---------|------------------|
 | P-9 | `ENABLE_PROMPT_CACHING_1H=1`（プロンプトキャッシュ TTL 5分→1h） | ✅ 即採用（最優先） | ✅ **適用**（GitHub Variable 設定済 + env-vars.md 追記）。技術監修役/@owner 両GO・低リスク。回帰: 次パイプライン1サイクルでコスト計測 |
-| P-10 | headless `--fallback-model`（`claude -p` のモデル降格） | ✅ 採用 | ✅ **適用**（2026-06-06・#2672）。`run_deep_research_workflow.py`（`--fallback-model claude-sonnet-5`）/ `run_discussion_review.py` / `monitor_x_mentions.py` / `monitor_qiita_comments.py`（各 `--fallback-model claude-haiku-4-5`）に追加。⚠️ settings.json 配列指定は未実装（#8413）・`-p` フラグ限定・overload(529)のみ発火 |
+| P-10 | headless `--fallback-model`（`claude -p` のモデル降格） | ✅ 採用 | ✅ **適用**（2026-06-06・#2672）。`run_deep_research_workflow.py`（`--fallback-model claude-sonnet-5`）/ `run_discussion_review.py` / `monitor_x_mentions.py` / `monitor_qiita_comments.py`（各 `--fallback-model claude-haiku-4-5`）に追加（同リポジトリ内のツールは #314 でエイリアス `sonnet` / `haiku` に統一済み）。⚠️ settings.json 配列指定は未実装（#8413）・`-p` フラグ限定・overload(529)のみ発火 |
 | P-11 | `SubagentStop` additionalContext 自己修正フィードバック | 🔸 縮小採用 | ✅ **適用**（2026-06-06・#2672）。`.claude/hooks/subagent-stop.sh` 新設・`settings.json` に `SubagentStop` エントリ追加。⚠️ `/usage` はインタラクティブ専用・headless不可のため除外（コメントに明記）。正常終了（end_turn・is_error=false）はスキップ・エラー/非正常時のみ additionalContext 注入 |
 | P-12 | 秘匿情報の印字側マスク監査 | 🔄 方向転換 | ✅ **適用**（2026-06-06・PR #2700 マージ済み）。`tools/mask_secrets.py` 新設・`setup_github_variables.py` 統合・`env-vars.md` 整備。`mask_value(None)→"****"` の設計確定 |
 | P-13 | `requiredMinimumVersion`（2ライセンス版固定） | ⏸️ 見送り | ✅ **検証完了・見送り**（2026-06-06・#2672）。v2.1.163 リリースノート確認: **managed-settings（組織レベル）専用**。プロジェクト `.claude/settings.json` に記載しても無効。Claude.ai スケジュール環境は managed 設定を使えないため本プロジェクトには適用不可。代替: CLAUDE.md + lessons-core で最低バージョン要件を文書化（今後必要になれば） |

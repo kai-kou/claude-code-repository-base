@@ -104,7 +104,7 @@ PLAUSIBLE と上限超の NIT はレビュー本文に集約する。指摘ゼ�
 > `.claude/skills/code-review/` は組み込み `/code-review`（disable-model-invocation で自律起動不可）を
 > 同名 project スキルとして置換した自前実装（#275 → #280）。対話セッションの手打ちも同スキルに解決される。
 > 万一 `Skill(code-review)` が disable-model-invocation エラーを返す場合（bundled 側に解決が倒れた場合）のみ、
-> 旧手段としてサブエージェント（`general-purpose`/`Explore`）に Step 2 の観点表を渡す直接レビューへフォールバックする。
+> 旧手段としてサブエージェント（`general-purpose`）に Step 2 の観点表を渡す直接レビューへフォールバックする（`Explore` は `.claude/agents/Explore.md` で探索専用の haiku に固定しているためレビューに使わない・#715）。
 
 diff ≥300行 / `type:security` / `type:breaking-change` / `high_risk` 差分（#627）の PR は Layer 2（`discussion_review_trigger.py`）も起動する。
 critical 指摘は修正必須（自動ゲート扱い）。**外部 AI レビュアー（Copilot / Gemini）への依頼はしない。**

@@ -27,7 +27,7 @@
 |------|--------|--------|
 | 知能重視タスク（長文生成・複雑な設計判断） | `opus` | `/effort xhigh`（明示指定。Opus 5.5 の既定は `medium`） |
 | メインセッション・実装・PR 対応 | `sonnet` | `/effort medium` |
-| 調査・検証・チェック（サブエージェント） | `haiku` | — |
+| 調査・検証・チェック・要約・抽出（サブエージェント） | `haiku` | 既定 `medium` のまま（Haiku 5.5 から effort 対応） |
 | 一区切りに収まらない最難関・超長時間タスク | `fable`（高コスト・既定にしない） | `/effort high`〜 |
 
 **原則**: 迷ったら `sonnet`。`opus` は明確に必要な場合のみ（`.claude/settings.json` の既定が `sonnet` なのは意図的）。コスト削減はまず effort を下げて評価する。詳細は `claude-code-optimization.md`。
@@ -36,7 +36,7 @@
 
 | 状況 | subagent_type | model |
 |------|--------------|-------|
-| コードベース探索・ファイル検索 | `Explore` | メイン継承（v2.1.198〜）。安くするには `Explore.md` を `model: haiku` で上書き（§F-6） |
+| コードベース探索・ファイル検索 | `Explore` | `haiku`（組み込みはメイン継承だが `.claude/agents/Explore.md` で上書き済み・§F-6） |
 | 実装計画・設計 | `Plan` | `sonnet` |
 | 実装・API 呼び出し | `general-purpose` | `sonnet` |
 | 検証・パターン検索 | `general-purpose` | `haiku` |
@@ -71,7 +71,7 @@ Agent Teams の制約（teammate から background 不可・nested team 不可�
 
 ## Haiku サブエージェント向けプロンプト先頭テンプレート
 
-> Haiku は Claude 5 世代ではないため、**明示的な出力ルールを省略しない**（「判断に委ねる」方針の適用外・#326）。
+> Haiku には **明示的な出力ルールを省略しない**（「判断に委ねる」方針の適用外・#326）。Bedrock 等では `haiku` がまだ Haiku 4.5（Claude 5 世代でない）に解決されるため（#715）。
 
 ```
 # 出力ルール（必ず守ること）

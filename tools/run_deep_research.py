@@ -6,7 +6,7 @@ Deep Research の最終フォールバックランナー（DIY・ウェブリサ
 主エンジンはネイティブ /deep-research（対話起動は Skill 直接呼び出し・
 自律起動は `tools/run_deep_research_workflow.py` の `claude -p` サブプロセス）。
 本ファイルはそれらが真に失敗したときの最終フォールバックを担う:
-- 最終フォールバック: DIY (Sonnet 5 + WebSearch/WebFetch) 本ファイル内の DIY 実装
+- 最終フォールバック: DIY (Sonnet + WebSearch/WebFetch) 本ファイル内の DIY 実装
 - 外部 LLM API（Gemini 等）によるディープリサーチは行わない（Issue #260 で廃止）
 - 月コスト上限（API 従量経路時）: $50（warning $45・breaker $50）
 
@@ -291,7 +291,7 @@ def check_budget(estimated_cost: float) -> str | None:
 
 
 def run_diy(research_id: str, theme: str, prompt_text: str) -> RunResult:
-    """DIY フォールバック実装（Sonnet 5 + WebSearch / WebFetch）。
+    """DIY フォールバック実装（Sonnet + WebSearch / WebFetch）。
 
     Phase A: スケルトン（呼び出し元の Claude Code セッション内で WebSearch を実行する設計）。
     Phase B で並列 sub-agent + Anthropic Messages API への移行を行う。
@@ -311,7 +311,7 @@ def run_diy(research_id: str, theme: str, prompt_text: str) -> RunResult:
         "Claude Code セッション内で sections/sources/official_names を埋めてください。\n"
     )
     result.duration_seconds = time.perf_counter() - start
-    result.cost_usd = 0.55  # 想定単価（Sonnet 5 60K入力+25K出力）
+    result.cost_usd = 0.37  # 想定単価（Sonnet 5.5 $2/$10 で 60K入力+25K出力）
     result.search_count = 8  # 想定値
     return result
 

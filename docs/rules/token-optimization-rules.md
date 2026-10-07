@@ -55,7 +55,7 @@ Claude Code のトークン消費を最小化し、セッションあたりの�
 
 **#369 の再校正（当時の到達値 ~68.7KB / ~17,200 トークン。現行予算は下の増減ログを参照）**: #367→#375 の追加で増減ログが 4 行に到達し再棚卸しの合図が立ったため、#324 と同じ判断軸（「代替の強制レイヤが既にあるか」）で 13 ファイル全件を再点検した。降格したのは ① `session-compression-rules.md` の「新規ルールファイル追加時の必須手順」（`session-start.sh`/`post-compact.sh` の `check_rules_sync.sh --fix` が既に自動検出・修正するため、Hot には要旨 1 行のみ残し手順全文は `session-compression-rules-detail.md` へ）② `agent-team-summary.md` の Verbalized Sampling 記述（`agent-team.md`「サブエージェントの高度な機能」へ移設し SSOT を一本化）③ `completion-report-rules.md` の良い例/悪い例の具体テキスト（`stop-completion-report-check.sh` が Stop 時に既に是正リマインドを出すため、Hot には判断基準の「鉄則」5 項目のみ残し、例文は新設 `completion-report-rules-detail.md` へ）。#325/#328/#367/#375 で追加された行動規範自体は「実観測ベースの行動規範」（削減対象外②）に該当し、代替の強制レイヤが無いため Hot に残置した（再点検の結果、追加分の削除は不可と判断）。
 
-**削減対象外（意図的に残す）**: ① A-1〜A-6 の既約境界外リスト ② 実観測ベースの行動規範 lessons（記事の削除基準 "specific, demonstrable failure mode" に照らすと残す側）③ Haiku サブエージェント向けの明示的な出力ルール（Claude 5 世代ではないため「判断に委ねる」の適用外）。**#469・#504 の再点検でもこの 3 区分は維持**（該当箇所は全件この基準で残置と再確認）。#504 で削減できたのは削減対象外に該当しない箇所のうち、フック（`pre-pr-create-check.sh`）または他 Hot 層ファイル（`pr-review-flow-summary.md`）と逐語重複していた 2 箇所のみで、以後の追加は下記の機械チェックに従う。
+**削減対象外（意図的に残す）**: ① A-1〜A-6 の既約境界外リスト ② 実観測ベースの行動規範 lessons（記事の削除基準 "specific, demonstrable failure mode" に照らすと残す側）③ Haiku サブエージェント向けの明示的な出力ルール（Bedrock 等では `haiku` がまだ Claude 5 世代でない Haiku 4.5 に解決されるため「判断に委ねる」の適用外・#715）。**#469・#504 の再点検でもこの 3 区分は維持**（該当箇所は全件この基準で残置と再確認）。#504 で削減できたのは削減対象外に該当しない箇所のうち、フック（`pre-pr-create-check.sh`）または他 Hot 層ファイル（`pr-review-flow-summary.md`）と逐語重複していた 2 箇所のみで、以後の追加は下記の機械チェックに従う。
 
 #### もう一方の常駐コスト: スキル / コマンドの `description`（#493・参考値）
 
@@ -88,6 +88,7 @@ Hot 層に 700B 強を足すのと同じ重みを持つ。
 | 2026-09-23 | 87,885 B | +14 B | #695/#696（Opus 5.5 リリース対応）: `agent-team-summary.md` のモデル選択表で `opus` の既定 effort 表記を「既定は `high`」→「Opus 5.5 の既定は `medium`」に訂正（Opus 5.5 リリースに伴う事実訂正で新規追記ではない）。増減ログ未記載のまま反映されていたため #701 で追記して整合を回復（`tools/check_hot_budget.py` の実測とログ最新行の乖離検知で発覚） |
 | 2026-09-25 | 88,053 B | +168 B | #708: `lessons-core.md` の Warm 層索引に L-135（無人ルーティンで `Workflow` 起動が承認待ちで停止する症状 → `lessons/permissions.md`）の 1 行を追加。索引行のみで本文は Warm 層に置く（症状起点の索引は圧縮後も残る必要があるため削減対象外②） |
 | 2026-10-07 | 88,231 B | +178 B | #713: `user-instruction-issue-rules.md` 冒頭の原則を「Issue は『なぜ』の唯一の場所」から「Issue はユーザー意図と経緯の唯一の正本・変更理由はコミット / PR 本文にも書く」へ言い換え（CLAUDE.md の Why / Why not 置き場所の再定義に合わせた矛盾解消で、新規の規範追加ではない） |
+| 2026-10-07 | 88,381 B | +150 B | #715（Haiku 5.5 / Sonnet 5.5 リリース対応）: `agent-team-summary.md` のモデル表・サブエージェント表を Explore の haiku 上書き（`.claude/agents/Explore.md` 新設）と Haiku 5.5 の用途に合わせて更新し、Haiku 向け出力ルールの理由文を「Claude 5 世代ではない」から「Bedrock 等ではまだ Haiku 4.5 に解決される」へ事実訂正。新規規範の追加ではない。増減ログは #713 の時点で 5 行に達し合図 ① が立っているため、再棚卸しは #710 で行う |
 
 **記載予算（基準）は ~86.7KB / ~21,300 トークン**（#648 再校正・下記ツールが機械検証する）。
 

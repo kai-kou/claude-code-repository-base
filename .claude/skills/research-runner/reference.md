@@ -61,7 +61,7 @@ fi
 
 ---
 
-## Step 4: 最終フォールバック（DIY・ウェブリサーチ＝Sonnet 5 + WebSearch）【Step 3（3a/3b）が失敗時のみ】
+## Step 4: 最終フォールバック（DIY・ウェブリサーチ＝Sonnet + WebSearch）【Step 3（3a/3b）が失敗時のみ】
 
 Step 3 のネイティブ `/deep-research`（対話起動なら 3a 直接呼び出し → 3b `claude -p` の両方、自律起動なら 3b）が
 **実際に失敗した場合のみ** 実行する。これらを試さずに本 Step を実行するのは禁止（安易な DIY 直行禁止）。
@@ -77,13 +77,13 @@ Step 3 のネイティブ `/deep-research`（対話起動なら 3a 直接呼び�
 > CLI インターフェース変化（下流プロジェクトの実障害と同型）の恒久対応を検討する
 > （反復検知ルールの SSOT は `SKILL.md` Step 3b。本ファイルの記載は参照）。
 
-このスキル自身が Sonnet 5 として、本セッション内で WebSearch / WebFetch を実行し、
+このスキル自身が Sonnet（`sonnet` エイリアス）として、本セッション内で WebSearch / WebFetch を実行し、
 `research_schema.json` に準拠した JSON を組み立てて `tools/run_deep_research.py` に引き渡す。
 
 実行手順:
 
 1. プロンプトの調査項目（5〜7 項目 + 正式名称確認リスト）を識別
-2. **項目ごとに並列 sub-agent**（Haiku 4.5 推奨）を起動して WebSearch（5〜10クエリ）+ WebFetch（主要 2-3 URL）
+2. **項目ごとに並列 sub-agent**（`haiku` 推奨）を起動して WebSearch（5〜10クエリ）+ WebFetch（主要 2-3 URL）
 3. 各 sub-agent は以下のフォーマットで返す:
 
 ```json

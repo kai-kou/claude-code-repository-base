@@ -78,6 +78,8 @@ COST_LOG = REPO_ROOT / "content" / "pipeline-state" / "research_cost_log.jsonl"
 
 DEFAULT_ENGINE_MODEL = "opus"        # エイリアス既定（最新 Opus に自動追随・agent-team.md「モデル指定の方針」）
 DEFAULT_NORMALIZE_MODEL = "sonnet"   # 同上（最新 Sonnet に自動追随）
+# haiku（Haiku 5.5）への置換は実データ A/B で却下（#715）: コストは約 1/10 だが出典 URL の取りこぼし・本文の要約化・
+# schema エラーが出た一方、節約は 1 本あたり約 $0.2（orchestrator 込み総コストの約 1%）にとどまった。
 # エンジンの effort は明示する（#698）。未指定だとモデル既定に従い、Opus 5.5 は medium（Opus 5 以前は high）に
 # 下がる。コスト・品質の実測（~$18.7/本）は high で較正しているため、既定は high に固定する。
 DEFAULT_ENGINE_EFFORT = "high"
